@@ -138,7 +138,6 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-# 結合對話上下文的智能關鍵字提取器 (解開 "他" 代表誰 的問題)
 def extract_search_keyword(text: str, context: str = "") -> str:
     if not llm_client:
         return text
@@ -174,18 +173,28 @@ def web_search(text: str, context: str = "") -> str:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
+# 移植自 mac-voice-input 黃金範本的極速語音輸入法後端修正助手
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
-    prompt = f"你是一個專業的繁體中文語音識別(STT)糾錯助手（類似 Typeless 語境修正）。請將以下語音識別結果中的同音錯別字、簡體字、以及不合理的人名/地名修正為正確的繁體中文。請只返回修正後的句子，不要有任何解釋：\n原句：{raw_text}"
+    prompt = (
+        "你是一個極速語音輸入法的後端修正助手。\n"
+        "請幫我將以下由語音轉文字產生的原始內容進行修飾：\n"
+        "1. 修正錯別字並補上適當的繁體中文標點符號。\n"
+        "2. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」、「那」等）。\n"
+        "3. 修正專有名詞（例如：K8s, Pod, K3s, N100, Immich, Docker, Mac, YouTube, 王剛, 阿龐師 等，請保留原英文縮寫與正確大小寫與繁體中文正字）。\n"
+        "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言、解釋或額外回應。直接輸出修正後的最終文字。\n\n"
+        f"原始內容：{raw_text}\n"
+        "修正後的內容："
+    )
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=60
+            max_tokens=80
         )
         corrected = res.choices[0].message.content.strip()
-        logger.info(f"STT Correction (Typeless style): '{raw_text}' -> '{corrected}'")
+        logger.info(f"STT Correction (mac-voice-input Golden Prompt): '{raw_text}' -> '{corrected}'")
         return corrected
     except Exception as e:
         logger.error(f"STT correction failed: {e}")
@@ -483,7 +492,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 save_memory("User", user_text)
 
-                # 帶入過往對話 Context 進行關鍵字提煉與搜尋
                 recent_context = " ".join(m["content"] for m in chat_history[-4:] if m["role"] != "system")
                 search_info = ""
                 if is_semantic_search_intent(user_text):
@@ -491,7 +499,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請務必結合上述搜尋結果回答男朋友，展現你剛剛上網查到的知識！"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋結果回答男朋友，展現你剛剛上網查到的知識！"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
