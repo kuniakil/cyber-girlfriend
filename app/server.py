@@ -82,11 +82,10 @@ stt_model = WhisperModel("base", device="cpu", compute_type="int8", download_roo
 
 llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL) if LLM_API_KEY else None
 
-# 🧠 修復 Google Gemini Embedding REST Endpoint (text-embedding-004)
 def get_google_embedding(text: str) -> List[float]:
     if not GOOGLE_API_KEY:
         return []
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GOOGLE_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key={GOOGLE_API_KEY}"
     payload = {
         "model": "models/text-embedding-004",
         "content": {
@@ -103,8 +102,6 @@ def get_google_embedding(text: str) -> List[float]:
             res = json.loads(response.read().decode("utf-8"))
             return res.get("embedding", {}).get("values", [])
     except Exception as e:
-        # 降級嘗試 embedding-001 或記錄錯誤
-        logger.error(f"Google Embedding API Error: {e}")
         return []
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
@@ -117,8 +114,7 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot_product / (norm_v1 * norm_v2)
 
-# 搜尋意圖基準錨點向量
-SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識"
+SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識 最新"
 SEARCH_ANCHOR_VEC = get_google_embedding(SEARCH_ANCHOR_TEXT) if GOOGLE_API_KEY else []
 
 def is_semantic_search_intent(text: str) -> bool:
@@ -131,7 +127,7 @@ def is_semantic_search_intent(text: str) -> bool:
     vec = get_google_embedding(text)
     sim = cosine_similarity(vec, SEARCH_ANCHOR_VEC)
     logger.info(f"Google Semantic Search Score for '{text}': {sim:.4f}")
-    return sim > 0.50 or has_pattern
+    return sim > 0.45 or has_pattern
 
 FACE_IMAGE_B64 = ""
 FACE_PATHS = ["/app/custom/face.png", "/app/custom/face.jpg", "/app/custom/cyber_girlfriend_face.png", "/tmp/cyber_girlfriend_face.png"]
@@ -142,23 +138,28 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-def extract_search_keyword(text: str) -> str:
+# 結合對話上下文的智能關鍵字提取器 (解開 "他" 代表誰 的問題)
+def extract_search_keyword(text: str, context: str = "") -> str:
     if not llm_client:
         return text
-    prompt = f"請從以下句子中，提取出 2-3 個最適合作網頁搜尋的精準關鍵字。只返回關鍵字，不要有說明：\n{text}"
+    prompt = f"請結合對話上下文，從男朋友最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。如果句子中有代詞（如'他'、'這個'），請根據上下文替換為具體人名或主體。只返回空格分隔的關鍵字（例如: '王剛 最新 菜色 影片'），嚴禁包含數字列表或多餘說明：\n[對話上下文]\n{context}\n[最新一句話]\n{text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=30
         )
-        return res.choices[0].message.content.strip()
+        kw = res.choices[0].message.content.strip()
+        kw = re.sub(r'^\d+\.\s*', '', kw)
+        kw = kw.replace('\n', ' ')
+        logger.info(f"Extracted Contextual Search Keywords: '{kw}'")
+        return kw
     except Exception as e:
         return text
 
-def web_search(text: str) -> str:
+def web_search(text: str, context: str = "") -> str:
     try:
-        query = extract_search_keyword(text)
+        query = extract_search_keyword(text, context)
         logger.info(f"Triggering DuckDuckGo Search for: {query}")
         results = []
         with DDGS() as ddgs:
@@ -167,7 +168,7 @@ def web_search(text: str) -> str:
                 if body:
                     results.append(body)
         res_str = "\n".join(results)
-        logger.info(f"DuckDuckGo Search Results: {res_str[:120]}...")
+        logger.info(f"DuckDuckGo Search Results Snippet: {res_str[:120]}...")
         return res_str
     except Exception as e:
         logger.error(f"DuckDuckGo search error: {e}")
@@ -176,7 +177,7 @@ def web_search(text: str) -> str:
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
-    prompt = f"你是一個專業的繁體中文語音識別(STT)糾錯助手。請將以下語音識別結果中的同音錯別字、簡體字、以及不合理的人名/地名修正為正確的繁體中文。請只返回修正後的句子，不要有任何解釋：\n原句：{raw_text}"
+    prompt = f"你是一個專業的繁體中文語音識別(STT)糾錯助手（類似 Typeless 語境修正）。請將以下語音識別結果中的同音錯別字、簡體字、以及不合理的人名/地名修正為正確的繁體中文。請只返回修正後的句子，不要有任何解釋：\n原句：{raw_text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -184,7 +185,7 @@ def correct_stt_text(raw_text: str) -> str:
             max_tokens=60
         )
         corrected = res.choices[0].message.content.strip()
-        logger.info(f"STT Correction: '{raw_text}' -> '{corrected}'")
+        logger.info(f"STT Correction (Typeless style): '{raw_text}' -> '{corrected}'")
         return corrected
     except Exception as e:
         logger.error(f"STT correction failed: {e}")
@@ -438,7 +439,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力，當接收到搜尋資料時請結合資料回答。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力，當接收到搜尋補充資料時，請務必結合資料自然回答，嚴禁回答'我無法即時查詢網絡'等宣稱無法連網的話。請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
     if history_memory:
         system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
 
@@ -482,13 +483,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 save_memory("User", user_text)
 
+                # 帶入過往對話 Context 進行關鍵字提煉與搜尋
+                recent_context = " ".join(m["content"] for m in chat_history[-4:] if m["role"] != "system")
                 search_info = ""
                 if is_semantic_search_intent(user_text):
-                    search_info = web_search(user_text)
+                    search_info = web_search(user_text, context=recent_context)
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋結果回答男朋友，展現你剛剛上網查到的知識！"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請務必結合上述搜尋結果回答男朋友，展現你剛剛上網查到的知識！"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
