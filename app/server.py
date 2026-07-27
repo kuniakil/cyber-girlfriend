@@ -7,6 +7,7 @@ import base64
 import urllib.request
 import sqlite3
 import re
+import math
 from typing import List, Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -23,6 +24,7 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.minimaxi.chat/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "MiniMax-Text-01")
 WHISPER_DIR = os.environ.get("WHISPER_MODEL_DIR", "/app/models/whisper")
 VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "cyber_girlfriend_custom_v1")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
 DB_PATH = "/app/custom/girlfriend_memory.db"
 if not os.path.exists(os.path.dirname(DB_PATH)):
@@ -80,6 +82,57 @@ stt_model = WhisperModel("base", device="cpu", compute_type="int8", download_roo
 
 llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL) if LLM_API_KEY else None
 
+# 🧠 Google Gemini Embedding 向量生成器 (text-embedding-004)
+def get_google_embedding(text: str) -> List[float]:
+    if not GOOGLE_API_KEY:
+        return []
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GOOGLE_API_KEY}"
+    payload = {
+        "model": "models/text-embedding-004",
+        "content": {
+            "parts": [{"text": text}]
+        }
+    }
+    req = urllib.request.Request(
+        url,
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(payload).encode("utf-8")
+    )
+    try:
+        with urllib.request.urlopen(req) as response:
+            res = json.loads(response.read().decode("utf-8"))
+            return res.get("embedding", {}).get("values", [])
+    except Exception as e:
+        logger.error(f"Google Embedding API Error: {e}")
+        return []
+
+# 餘弦相似度計算 (Cosine Similarity)
+def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    norm_v1 = math.sqrt(sum(a * a for a in v1))
+    norm_v2 = math.sqrt(sum(b * b for b in v2))
+    if norm_v1 == 0 or norm_v2 == 0:
+        return 0.0
+    return dot_product / (norm_v1 * norm_v2)
+
+# 搜尋意圖基準錨點向量 (Anchor Vector for Search Intent)
+SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識"
+SEARCH_ANCHOR_VEC = get_google_embedding(SEARCH_ANCHOR_TEXT) if GOOGLE_API_KEY else []
+
+def is_semantic_search_intent(text: str) -> bool:
+    if not SEARCH_ANCHOR_VEC:
+        # Fallback 到關鍵字
+        patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"]
+        return any(re.search(p, text) for p in patterns)
+    
+    vec = get_google_embedding(text)
+    sim = cosine_similarity(vec, SEARCH_ANCHOR_VEC)
+    logger.info(f"Google Semantic Search Score for '{text}': {sim:.4f}")
+    # 分數大於 0.52 即判定為具備語意查詢意圖
+    return sim > 0.52
+
 FACE_IMAGE_B64 = ""
 FACE_PATHS = ["/app/custom/face.png", "/app/custom/face.jpg", "/app/custom/cyber_girlfriend_face.png", "/tmp/cyber_girlfriend_face.png"]
 for path in FACE_PATHS:
@@ -88,17 +141,6 @@ for path in FACE_PATHS:
             FACE_IMAGE_B64 = base64.b64encode(f.read()).decode("utf-8")
         logger.info(f"Face Image Loaded from {path}!")
         break
-
-# 🧠 語意意圖路由器 (Semantic Intent Router)：精準過濾搜尋需求
-SEARCH_PATTERNS = [
-    r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"
-]
-
-def is_search_intent(text: str) -> bool:
-    for pattern in SEARCH_PATTERNS:
-        if re.search(pattern, text):
-            return True
-    return False
 
 def extract_search_keyword(text: str) -> str:
     if not llm_client:
@@ -440,9 +482,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 save_memory("User", user_text)
 
-                # 語意意圖路由器 (0 毫秒高效過濾)
+                # Google Gemini 語意向量意圖檢索 (Semantic Vector Router)
                 search_info = ""
-                if is_search_intent(user_text):
+                if is_semantic_search_intent(user_text):
                     search_info = web_search(user_text)
 
                 current_messages = list(chat_history)
