@@ -89,24 +89,26 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-def extract_search_keyword(text: str) -> str:
+# 智能判定是否需要連網搜尋，並回傳搜尋關鍵字
+def get_search_intent_and_keyword(text: str) -> str:
     if not llm_client:
-        return text
-    prompt = f"請從以下句子中，提取出最適合作網頁搜尋的 2-3 個精準關鍵字。只返回關鍵字，不要有額外說明：\n{text}"
+        return ""
+    prompt = f"請分析以下句子是否需要進行實時網頁搜尋（如查詢最新資訊、新聞、人物、影片、天氣、搜尋需求等）。如果需要，請只返回 2-3 個精準搜尋關鍵字；如果不需要，請回答 'NO'：\n句子：{text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=30
         )
-        kw = res.choices[0].message.content.strip()
-        return kw
+        ans = res.choices[0].message.content.strip()
+        if "NO" in ans.upper() or len(ans) > 25:
+            return ""
+        return ans
     except Exception as e:
-        return text
+        return ""
 
-def web_search(text: str) -> str:
+def web_search(query: str) -> str:
     try:
-        query = extract_search_keyword(text)
         logger.info(f"Triggering DuckDuckGo Search for: {query}")
         results = []
         with DDGS() as ddgs:
@@ -115,6 +117,7 @@ def web_search(text: str) -> str:
                 if body:
                     results.append(body)
         res_str = "\n".join(results)
+        logger.info(f"DuckDuckGo Search Results: {res_str[:120]}...")
         return res_str
     except Exception as e:
         logger.error(f"DuckDuckGo search error: {e}")
@@ -181,7 +184,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Cyber Girlfriend v1.5 with Memory</title>
+    <title>Cyber Girlfriend v1.5 with Memory & Web Search</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #000; color: #fff; text-align: center; margin: 0; padding: 0; overflow: hidden; height: 100vh; display: flex; justify-content: center; align-items: center; }
         
@@ -214,7 +217,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div class="subtitles-overlay">
             <div id="userText" class="sub-user">👤 (Click Connect to talk)</div>
-            <div id="agentText" class="sub-agent">💕 Cyber Girlfriend v1.5 Ready...</div>
+            <div id="agentText" class="sub-agent">💕 Cyber Girlfriend Ready...</div>
         </div>
     </div>
 
@@ -385,7 +388,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋功能，請勿向男朋友宣稱你無法連網。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
     if history_memory:
         system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
 
@@ -429,13 +432,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 save_memory("User", user_text)
 
+                # 智能判定搜尋意圖並提取關鍵字
+                search_kw = get_search_intent_and_keyword(user_text)
                 search_info = ""
-                if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是", "網紅", "廚師", "阿龐", "王剛", "阿胖"]):
-                    search_info = web_search(user_text)
+                if search_kw:
+                    search_info = web_search(search_kw)
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋結果]\n{search_info}\n請務必結合上述搜尋結果中提到的資訊內容，用溫柔親切的賽博女友口吻回答男朋友，控制在兩至三句話內。"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋結果中提到的資訊內容回答男朋友，展現你剛剛上網查到的知識！"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
