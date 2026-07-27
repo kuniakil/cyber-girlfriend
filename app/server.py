@@ -5,11 +5,13 @@ import os
 import tempfile
 import base64
 import urllib.request
+import re
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
 from openai import OpenAI
 from faster_whisper import WhisperModel
+from duckduckgo_search import DDGS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cyber-girlfriend")
@@ -33,6 +35,37 @@ for path in FACE_PATHS:
             FACE_IMAGE_B64 = base64.b64encode(f.read()).decode("utf-8")
         logger.info(f"Face Image Loaded from {path}!")
         break
+
+# 🔍 免費 DuckDuckGo 實時檢索
+def web_search(query: str) -> str:
+    try:
+        logger.info(f"Triggering DuckDuckGo Search for query: {query}")
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=3):
+                results.append(r.get("body", ""))
+        return "\n".join(results)
+    except Exception as e:
+        logger.error(f"DuckDuckGo search error: {e}")
+        return ""
+
+# 🧠 方案 2：Smart Corrector 智能同音字與語境糾錯
+def correct_stt_text(raw_text: str) -> str:
+    if not llm_client or len(raw_text) < 2:
+        return raw_text
+    prompt = f"請幫我糾正這段語音識別(STT)的繁體中文錯別字與同音字錯誤（例如：四川之共 -> 四川自貢，阿龐山 -> 阿龐師）。只返回修復後的正確文字，不要解釋：\n原句：{raw_text}"
+    try:
+        res = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=60
+        )
+        corrected = res.choices[0].message.content.strip()
+        logger.info(f"STT Correction: '{raw_text}' -> '{corrected}'")
+        return corrected
+    except Exception as e:
+        logger.error(f"STT correction failed: {e}")
+        return raw_text
 
 def generate_cloned_tts(text: str) -> str:
     if not LLM_API_KEY:
@@ -296,12 +329,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 try:
                     segments, _ = stt_model.transcribe(tmp_audio, language="zh")
-                    user_text = "".join(seg.text for seg in segments).strip()
+                    raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
                         os.unlink(tmp_audio)
 
-                if not user_text:
+                if not raw_user_text:
                     logger.info("Empty audio detected, auto loop listening.")
                     await websocket.send_json({"type": "transcript", "text": "..."})
                     await websocket.send_json({"type": "llm_reply", "text": "嗯？剛剛沒聽清楚呢，要不再說一次？"})
@@ -310,20 +343,34 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_json({"type": "audio", "audio": b64_audio})
                     continue
 
-                logger.info(f"STT Result: {user_text}")
+                # 方案 2：Smart Corrector 同音字與語意修復
+                user_text = correct_stt_text(raw_user_text)
+                logger.info(f"STT Final Text: {user_text}")
                 await websocket.send_json({"type": "transcript", "text": user_text})
 
                 if not llm_client:
                     await websocket.send_json({"type": "error", "message": "LLM API Key missing"})
                     continue
 
-                chat_history.append({"role": "user", "content": user_text})
+                # 方案 3：實時網路檢索 (包含特定人物、新聞、地點或不確定問題時自動搜尋)
+                search_info = ""
+                if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是"]):
+                    search_info = web_search(user_text)
+
+                current_messages = list(chat_history)
+                if search_info:
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋資訊，用溫柔親切的賽博女友口吻回覆男朋友，控制在兩至三句話。"})
+                
+                current_messages.append({"role": "user", "content": user_text})
+
                 res = llm_client.chat.completions.create(
                     model=LLM_MODEL,
-                    messages=chat_history,
+                    messages=current_messages,
                     max_tokens=150
                 )
                 reply_text = res.choices[0].message.content.strip()
+
+                chat_history.append({"role": "user", "content": user_text})
                 chat_history.append({"role": "assistant", "content": reply_text})
 
                 logger.info(f"LLM Reply: {reply_text}")
