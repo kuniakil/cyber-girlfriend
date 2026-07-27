@@ -36,14 +36,36 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-def web_search(query: str) -> str:
+# 提取精準搜尋關鍵字
+def extract_search_keyword(text: str) -> str:
+    if not llm_client:
+        return text
+    prompt = f"請從以下句子中，提取出最適合作網頁搜尋的 2-3 個精準關鍵字（例如：'你有聽過四川自貢的廚師王剛嗎' -> '四川自貢 廚師 王剛'）。只返回關鍵字，不要有額外說明：\n{text}"
     try:
-        logger.info(f"Triggering DuckDuckGo Search for query: {query}")
+        res = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=30
+        )
+        kw = res.choices[0].message.content.strip()
+        logger.info(f"Extracted Search Keywords: '{kw}'")
+        return kw
+    except Exception as e:
+        return text
+
+def web_search(text: str) -> str:
+    try:
+        query = extract_search_keyword(text)
+        logger.info(f"Triggering DuckDuckGo Search for: {query}")
         results = []
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=3):
-                results.append(r.get("body", ""))
-        return "\n".join(results)
+                body = r.get("body", "")
+                if body:
+                    results.append(body)
+        res_str = "\n".join(results)
+        logger.info(f"DuckDuckGo Raw Results Snippet: {res_str[:120]}...")
+        return res_str
     except Exception as e:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
@@ -51,7 +73,7 @@ def web_search(query: str) -> str:
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
-    prompt = f"你是一個專業的繁體中文語音識別(STT)糾錯助手。請將以下語音識別結果中的同音錯別字、簡體字、以及不合理的人名/地名（例如：網缸->王剛，四川之共->四川自貢）修正為正確的繁體中文。請只返回修正後的句子，不要有任何解釋：\n原句：{raw_text}"
+    prompt = f"你是一個專業的繁體中文語音識別(STT)糾錯助手。請將以下語音識別結果中的同音錯別字、簡體字、以及不合理的人名/地名修正為正確的繁體中文。請只返回修正後的句子，不要有任何解釋：\n原句：{raw_text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -326,7 +348,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    # 強制 Whisper 使用繁體中文 initial_prompt 指引
                     segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
@@ -342,7 +363,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_json({"type": "audio", "audio": b64_audio})
                     continue
 
-                # 方案 2：Smart Corrector 繁體同音字糾錯
                 user_text = correct_stt_text(raw_user_text)
                 logger.info(f"STT Final Text: {user_text}")
                 await websocket.send_json({"type": "transcript", "text": user_text})
@@ -351,14 +371,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": "LLM API Key missing"})
                     continue
 
-                # 方案 3：DuckDuckGo 實時檢索
+                # 判定觸發搜尋邏輯 (遇到特定問句、人名、地點、網紅、廚師等自動檢索)
                 search_info = ""
-                if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是", "網紅", "廚師"]):
+                if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是", "網紅", "廚師", "阿龐", "王剛", "阿胖"]):
                     search_info = web_search(user_text)
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋資訊，用溫柔親切的賽博女友口吻回覆男朋友，控制在兩至三句話。"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋結果]\n{search_info}\n請務必結合上述搜尋結果中提到的資訊內容，用溫柔親切的賽博女友口吻回答男朋友，控制在兩至三句話內。"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
