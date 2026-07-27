@@ -141,7 +141,7 @@ for path in FACE_PATHS:
 def extract_search_keyword(text: str, context: str = "") -> str:
     if not llm_client:
         return text
-    prompt = f"請結合對話上下文，從男朋友最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。如果句子中有代詞（如'他'、'這個'），請根據上下文替換為具體人名或主體。只返回空格分隔的關鍵字（例如: '王剛 最新 菜色 影片'），嚴禁包含數字列表或多餘說明：\n[對話上下文]\n{context}\n[最新一句話]\n{text}"
+    prompt = f"請結合對話上下文，從男朋友最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。如果句子中有代詞（如'他'、'這個'），請根據上下文替換為具體人名或主體。只返回空格分隔的關鍵字（例如: '阿龐 廚師 最新影片'），嚴禁包含數字列表或多餘說明：\n[對話上下文]\n{context}\n[最新一句話]\n{text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -164,7 +164,7 @@ def web_search(text: str, context: str = "") -> str:
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=3):
                 body = r.get("body", "")
-                if body:
+                if body and not any(junk in body.lower() for junk in ["jailbreak", "chatgpt dan", "collabor"]):
                     results.append(body)
         res_str = "\n".join(results)
         logger.info(f"DuckDuckGo Search Results Snippet: {res_str[:120]}...")
@@ -173,7 +173,6 @@ def web_search(text: str, context: str = "") -> str:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
-# 移植自 mac-voice-input 黃金範本的極速語音輸入法後端修正助手
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
@@ -182,7 +181,7 @@ def correct_stt_text(raw_text: str) -> str:
         "請幫我將以下由語音轉文字產生的原始內容進行修飾：\n"
         "1. 修正錯別字並補上適當的繁體中文標點符號。\n"
         "2. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」、「那」等）。\n"
-        "3. 修正專有名詞（例如：K8s, Pod, K3s, N100, Immich, Docker, Mac, YouTube, 王剛, 阿龐師 等，請保留原英文縮寫與正確大小寫與繁體中文正字）。\n"
+        "3. 修正專有名詞（例如：K8s, Pod, K3s, N100, Immich, Docker, Mac, YouTube, 王剛, 阿龐, 丼飯, 山海丼 等，請保留原英文縮寫與正確大小寫與繁體中文正字）。\n"
         "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言、解釋或額外回應。直接輸出修正後的最終文字。\n\n"
         f"原始內容：{raw_text}\n"
         "修正後的內容："
@@ -448,7 +447,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力，當接收到搜尋補充資料時，請務必結合資料自然回答，嚴禁回答'我無法即時查詢網絡'等宣稱無法連網的話。請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力。重要規則：若網路搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
     if history_memory:
         system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
 
@@ -467,7 +466,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。")
+                    # 指引 Whisper 繁體中文對話與日式丼飯熱詞
+                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話，包含阿龐、丼飯、山海丼等常見詞彙。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
@@ -499,7 +499,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋結果回答男朋友，展現你剛剛上網查到的知識！"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述真實搜尋結果回答男朋友。若搜尋結果不足以回答，請溫柔坦白告知，嚴禁憑空猜測捏造菜名或影片標題！"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
