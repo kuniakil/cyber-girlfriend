@@ -114,11 +114,11 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot_product / (norm_v1 * norm_v2)
 
-SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識 最新 阿胖山"
+SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識 最新 發布"
 SEARCH_ANCHOR_VEC = get_google_embedding(SEARCH_ANCHOR_TEXT) if GOOGLE_API_KEY else []
 
 def is_semantic_search_intent(text: str) -> bool:
-    patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎", r"阿胖山"]
+    patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"]
     has_pattern = any(re.search(p, text) for p in patterns)
     
     if not SEARCH_ANCHOR_VEC:
@@ -138,20 +138,30 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
+# 完全基於動態語意與上下文的關鍵字提煉器（零硬編碼名詞）
 def extract_search_keyword(text: str, context: str = "") -> str:
     if not llm_client:
         return text
-    prompt = f"請結合對話上下文，從男朋友最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。如果句子中有代詞（如'他'、'這個'），請根據上下文替換為具體人名或主體。只返回空格分隔的關鍵字（例如: '阿胖山 山海燉 影片'），嚴禁包含數字列表或多餘說明：\n[對話上下文]\n{context}\n[最新一句話]\n{text}"
+    prompt = (
+        "你是一個智能搜尋關鍵字提煉助手。\n"
+        "請結合對話上下文，從使用者最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。\n"
+        "注意事項：\n"
+        "1. 如果使用者正在矯正特定字詞（例如：'胖是肥胖的胖'），請根據其補充說明拼出正確的專有名詞/人名。\n"
+        "2. 如果句子包含代詞（如'他'、'這個'），請結合上下文替換為明確的主體與專有名詞。\n"
+        "3. 只返回空格分隔的精準關鍵字，嚴禁包含數字列表或多餘說明文字。\n\n"
+        f"[對話上下文]\n{context}\n\n"
+        f"[最新話語]\n{text}"
+    )
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=30
+            max_tokens=40
         )
         kw = res.choices[0].message.content.strip()
         kw = re.sub(r'^\d+\.\s*', '', kw)
         kw = kw.replace('\n', ' ')
-        logger.info(f"Extracted Contextual Search Keywords: '{kw}'")
+        logger.info(f"Extracted Dynamic Contextual Search Keywords: '{kw}'")
         return kw
     except Exception as e:
         return text
@@ -173,17 +183,17 @@ def web_search(text: str, context: str = "") -> str:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
-# 正名修復：支持 阿胖山 與 山海燉 相關美食詞彙
+# 完全通用的語意與拼字說明修正助手（零寫死具體名詞）
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
     prompt = (
-        "你是一個極速語音輸入法的後端修正助手。\n"
-        "請幫我將以下由語音轉文字產生的原始內容進行修飾：\n"
+        "你是一個極速語音輸入法的後端修正助手（類似 Typeless 語意與拼字修正）。\n"
+        "請幫我將以下由語音轉文字產生的原始內容進行修正：\n"
         "1. 修正錯別字並補上適當的繁體中文標點符號。\n"
-        "2. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」、「那」等）。\n"
-        "3. 修正專有名詞（例如：K8s, Pod, K3s, N100, Immich, Docker, Mac, YouTube, 王剛, 阿胖山, 山海燉, 山海燴, 丼飯 等，請保留原英文縮寫與正確大小寫與繁體中文正字）。\n"
-        "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言、解釋或額外回應。直接輸出修正後的最終文字。\n\n"
+        "2. 若使用者正在進行字形/拆字說明（例如'A是XX的A，B是YY的B'），請根據說明將該名詞拼寫為正確的繁體中文字詞。\n"
+        "3. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」等）。\n"
+        "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言或額外回應。直接輸出修正後的最終文字。\n\n"
         f"原始內容：{raw_text}\n"
         "修正後的內容："
     )
@@ -194,7 +204,7 @@ def correct_stt_text(raw_text: str) -> str:
             max_tokens=80
         )
         corrected = res.choices[0].message.content.strip()
-        logger.info(f"STT Correction (Correct Name Prompt): '{raw_text}' -> '{corrected}'")
+        logger.info(f"STT Correction (Dynamic Generic Prompt): '{raw_text}' -> '{corrected}'")
         return corrected
     except Exception as e:
         logger.error(f"STT correction failed: {e}")
@@ -448,7 +458,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力。重要規則：若網路搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女女朋友。你具備實時網路搜尋能力。重要規則：若網路搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
     if history_memory:
         system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
 
@@ -467,7 +477,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話，包含阿胖山、山海燉等常見美食詞彙。")
+                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
