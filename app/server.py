@@ -23,6 +23,7 @@ LLM_API_KEY = os.environ.get("MINIMAX_API_KEY") or os.environ.get("LLM_API_KEY",
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.minimaxi.chat/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "MiniMax-Text-01")
 WHISPER_DIR = os.environ.get("WHISPER_MODEL_DIR", "/app/models/whisper")
+WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")
 VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "cyber_girlfriend_custom_v1")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
@@ -41,9 +42,16 @@ def init_db():
             content TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_glossary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term TEXT UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
-    logger.info("SQLite Long-Term Memory DB initialized successfully!")
+    logger.info("SQLite DB (Memories & User Glossary) initialized successfully!")
 
 init_db()
 
@@ -57,11 +65,40 @@ def save_memory(role: str, content: str):
     except Exception as e:
         logger.error(f"Save memory error: {e}")
 
+def save_glossary_terms(text: str):
+    words = re.findall(r'[\u4e00-\u9fa5A-Za-z0-9_]{2,10}', text)
+    if not words:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        for w in words:
+            if len(w) >= 2 and not w.isdigit():
+                cursor.execute("INSERT OR IGNORE INTO user_glossary (term) VALUES (?)", (w,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Save glossary error: {e}")
+
+def get_user_glossary() -> str:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT term FROM user_glossary ORDER BY id DESC LIMIT 50")
+        rows = cursor.fetchall()
+        conn.close()
+        if not rows:
+            return ""
+        return ", ".join(r[0] for r in rows)
+    except Exception as e:
+        logger.error(f"Get glossary error: {e}")
+        return ""
+
 def search_memory(query: str) -> str:
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT role, content FROM memories ORDER BY id DESC LIMIT 15")
+        cursor.execute("SELECT role, content FROM memories ORDER BY id DESC LIMIT 20")
         rows = cursor.fetchall()
         conn.close()
         
@@ -77,8 +114,8 @@ def search_memory(query: str) -> str:
         logger.error(f"Search memory error: {e}")
         return ""
 
-logger.info(f"Loading faster-whisper (base, int8)...")
-stt_model = WhisperModel("base", device="cpu", compute_type="int8", download_root=WHISPER_DIR)
+logger.info(f"Loading faster-whisper ({WHISPER_MODEL_SIZE}, int8, cpu_threads=4)...")
+stt_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4, download_root=WHISPER_DIR)
 
 llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL) if LLM_API_KEY else None
 
@@ -107,7 +144,7 @@ def get_google_embedding(text: str) -> List[float]:
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
-    dot_product = sum(a * b for a, b in zip(v1, v2))
+    dot_product = sum(a * b for a, b in zip(v1, b) for a, b in zip(v1, v2))
     norm_v1 = math.sqrt(sum(a * a for a in v1))
     norm_v2 = math.sqrt(sum(b * b for b in v2))
     if norm_v1 == 0 or norm_v2 == 0:
@@ -118,7 +155,7 @@ SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTube
 SEARCH_ANCHOR_VEC = get_google_embedding(SEARCH_ANCHOR_TEXT) if GOOGLE_API_KEY else []
 
 def is_semantic_search_intent(text: str) -> bool:
-    patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"]
+    patterns = [r"搜尋", r"查一下", r"查詢", r"最新新聞", r"天氣狀況", r"熱門影片", r"最新資訊", r"上網查"]
     has_pattern = any(re.search(p, text) for p in patterns)
     
     if not SEARCH_ANCHOR_VEC:
@@ -127,7 +164,7 @@ def is_semantic_search_intent(text: str) -> bool:
     vec = get_google_embedding(text)
     sim = cosine_similarity(vec, SEARCH_ANCHOR_VEC)
     logger.info(f"Google Semantic Search Score for '{text}': {sim:.4f}")
-    return sim > 0.45 or has_pattern
+    return sim > 0.65 or has_pattern
 
 FACE_IMAGE_B64 = ""
 FACE_PATHS = ["/app/custom/face.png", "/app/custom/face.jpg", "/app/custom/cyber_girlfriend_face.png", "/tmp/cyber_girlfriend_face.png"]
@@ -183,16 +220,23 @@ def web_search(text: str, context: str = "") -> str:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
-def correct_stt_text(raw_text: str) -> str:
+def correct_stt_text(raw_text: str, context: str = "") -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
+    
+    glossary = get_user_glossary()
+    glossary_prompt = f"\n[使用者個人常用詞彙與偏好字典]\n{glossary}\n" if glossary else ""
+
     prompt = (
         "你是一個極速語音輸入法的後端修正助手（類似 Typeless 語意與拼字修正）。\n"
         "請幫我將以下由語音轉文字產生的原始內容進行修正：\n"
         "1. 修正錯別字並補上適當的繁體中文標點符號。\n"
         "2. 若使用者正在進行字形/拆字說明（例如'胖是肥胖的胖，山是山脈的山'），請根據說明將該名詞拼寫為正確的中文字詞（例如：阿胖山）。\n"
-        "3. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」等）。\n"
-        "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言或額外回應。直接輸出修正後的最終文字。\n\n"
+        "3. 請特別對照[使用者個人常用詞彙字典]，優先匹配歷史常用專有名詞（如地名、姓名、頻道名稱等），切勿改錯。\n"
+        "4. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」等）。\n"
+        "5. 保持原本的口吻與語意，僅做修飾，不要加入任何引言或額外回應。直接輸出修正後的最終文字。\n\n"
+        f"{glossary_prompt}"
+        f"[對話上下文]\n{context}\n\n"
         f"原始內容：{raw_text}\n"
         "修正後的內容："
     )
@@ -249,27 +293,39 @@ def generate_cloned_tts(text: str) -> str:
 
 app = FastAPI()
 
+@app.get("/favicon.ico")
+async def favicon():
+    return HTMLResponse(content="", status_code=204)
+
+@app.get("/robots.txt")
+async def robots():
+    return HTMLResponse(content="User-agent: *\nDisallow: /", media_type="text/plain")
+
 HTML_CONTENT = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Cyber Girlfriend v1.5 with Memory & Web Search</title>
+    <title>Cyber Girlfriend v1.7 (Single Session & Audio Lock)</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #000; color: #fff; text-align: center; margin: 0; padding: 0; overflow: hidden; height: 100vh; display: flex; justify-content: center; align-items: center; }
         
         .main-stage { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; background: #050508; }
         .face-container { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
-        #realFace { height: 92vh; max-width: 95vw; object-fit: contain; border-radius: 20px; box-shadow: 0 0 50px rgba(255, 121, 198, 0.25); }
+        #realFace { height: 85vh; max-width: 95vw; object-fit: contain; border-radius: 20px; box-shadow: 0 0 50px rgba(255, 121, 198, 0.25); }
 
         .top-bar { position: absolute; top: 20px; right: 20px; z-index: 10; display: flex; gap: 12px; align-items: center; }
         .btn { background: rgba(255, 121, 198, 0.85); color: #000; border: none; padding: 10px 20px; font-size: 14px; font-weight: bold; border-radius: 20px; cursor: pointer; backdrop-filter: blur(10px); transition: 0.2s; }
         .btn-danger { background: rgba(255, 85, 85, 0.85); color: #fff; }
+        .btn-send { background: #81c784; color: #000; }
         .btn:hover { transform: scale(1.05); }
         .status-badge { background: rgba(0,0,0,0.6); padding: 8px 16px; border-radius: 20px; font-size: 13px; color: #ff79c6; border: 1px solid rgba(255, 121, 198, 0.4); backdrop-filter: blur(10px); }
 
-        .subtitles-overlay { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 80%; max-width: 750px; background: rgba(15, 15, 20, 0.75); backdrop-filter: blur(15px); padding: 15px 25px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 10; pointer-events: none; }
-        .sub-user { color: #81c784; font-size: 15px; margin-bottom: 6px; }
-        .sub-agent { color: #ff79c6; font-size: 18px; font-weight: 500; }
+        .bottom-panel { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 85%; max-width: 800px; background: rgba(15, 15, 20, 0.85); backdrop-filter: blur(15px); padding: 15px 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 10; display: flex; flex-direction: column; gap: 10px; }
+        .sub-agent { color: #ff79c6; font-size: 17px; font-weight: 500; text-align: left; }
+        
+        .input-row { display: flex; gap: 10px; align-items: center; }
+        .chat-input { flex: 1; background: rgba(255,255,255,0.1); border: 1px solid rgba(255, 121, 198, 0.3); border-radius: 12px; color: #fff; padding: 10px 15px; font-size: 15px; outline: none; transition: 0.2s; }
+        .chat-input:focus { border-color: #ff79c6; background: rgba(255,255,255,0.15); box-shadow: 0 0 10px rgba(255, 121, 198, 0.3); }
     </style>
 </head>
 <body>
@@ -284,20 +340,22 @@ HTML_CONTENT = """<!DOCTYPE html>
             <img id="realFace" src="data:image/png;base64,""" + FACE_IMAGE_B64 + """\" alt="Cyber Girlfriend" />
         </div>
 
-        <div class="subtitles-overlay">
-            <div id="userText" class="sub-user">👤 (Click Connect to talk)</div>
+        <div class="bottom-panel">
             <div id="agentText" class="sub-agent">💕 Cyber Girlfriend Ready...</div>
+            <div class="input-row">
+                <input type="text" id="userInput" class="chat-input" placeholder="💬 語音會預覽填入此處，也可使用 Typeless 修改後發送..." />
+                <button id="sendBtn" class="btn btn-send">發送 ✉️</button>
+            </div>
         </div>
     </div>
 
     <script>
         let ws, mediaRecorder, audioChunks = [], isRecording = false, audioStream = null;
         let audioCtx = null, analyser = null, gainNode = null, silenceStart = null;
-        let isSpeaking = false, isStopped = false;
+        let isSpeaking = false, isStopped = false, currentPlayingAudio = null;
 
         const statusDiv = document.getElementById('status'), connectBtn = document.getElementById('connectBtn'), stopBtn = document.getElementById('stopBtn');
-        const userTextDiv = document.getElementById('userText'), agentTextDiv = document.getElementById('agentText');
-        const realFace = document.getElementById('realFace');
+        const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
         const SILENCE_THRESHOLD = 15;
         const SILENCE_DURATION = 1200;
@@ -308,6 +366,17 @@ HTML_CONTENT = """<!DOCTYPE html>
                 audioStream.getTracks().forEach(track => track.stop());
                 audioStream = null;
             }
+        }
+
+        function stopCurrentAudio() {
+            if (currentPlayingAudio) {
+                try {
+                    currentPlayingAudio.pause();
+                    currentPlayingAudio.currentTime = 0;
+                } catch(e) {}
+                currentPlayingAudio = null;
+            }
+            isSpeaking = false;
         }
 
         function setupAudioAmplifier(audioElement) {
@@ -323,6 +392,20 @@ HTML_CONTENT = """<!DOCTYPE html>
             gainNode.connect(analyser);
             analyser.connect(audioCtx.destination);
         }
+
+        function sendTextMessage() {
+            const text = userInput.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            stopCurrentAudio();
+            ws.send(JSON.stringify({ type: 'text', text: text }));
+            statusDiv.innerText = "Status: Girlfriend Thinking...";
+        }
+
+        sendBtn.onclick = sendTextMessage;
+        userInput.onkeydown = (e) => {
+            if (e.key === 'Enter') sendTextMessage();
+        };
 
         async function startAutoListening() {
             if (isRecording || isSpeaking || isStopped) return;
@@ -341,14 +424,14 @@ HTML_CONTENT = """<!DOCTYPE html>
                 mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
                 mediaRecorder.onstop = async () => {
                     isRecording = false;
-                    if (audioChunks.length > 0 && !isStopped) {
+                    if (audioChunks.length > 0 && !isStopped && !isSpeaking) {
                         const blob = new Blob(audioChunks, { type: 'audio/webm' });
                         const reader = new FileReader();
                         reader.readAsDataURL(blob);
                         reader.onloadend = () => {
                             const base64Audio = reader.result.split(',')[1];
                             ws.send(JSON.stringify({ type: 'audio', audio: base64Audio }));
-                            statusDiv.innerText = "Status: Processing Voice...";
+                            statusDiv.innerText = "Status: Transcribing Audio...";
                         };
                     }
                     releaseMicrophone();
@@ -361,7 +444,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
                 const recordStartTime = Date.now();
                 function checkVAD() {
-                    if (!isRecording || isStopped) return;
+                    if (!isRecording || isStopped || isSpeaking) return;
                     
                     micAnalyser.getByteFrequencyData(dataArray);
                     let sum = 0;
@@ -397,6 +480,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         stopBtn.onclick = () => {
             isStopped = true;
+            stopCurrentAudio();
             if (mediaRecorder && isRecording) mediaRecorder.stop();
             releaseMicrophone();
             if (ws) ws.close();
@@ -410,7 +494,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
             ws.onopen = () => {
-                statusDiv.innerText = "Status: Hands-Free Voice Active";
+                statusDiv.innerText = "Status: Voice & Text Active";
                 connectBtn.style.display = "none";
                 stopBtn.style.display = "inline-block";
                 startAutoListening();
@@ -419,24 +503,32 @@ HTML_CONTENT = """<!DOCTYPE html>
                 if (isStopped) return;
                 const data = JSON.parse(e.data);
                 if (data.type === 'transcript') {
-                    userTextDiv.innerText = "👤 You: " + data.text;
-                    statusDiv.innerText = "Status: Girlfriend Thinking...";
+                    userInput.value = data.text;
+                    statusDiv.innerText = "Status: Audio STT Ready";
                 } else if (data.type === 'llm_reply') {
                     agentTextDiv.innerText = "💕 GF: " + data.text;
                 } else if (data.type === 'audio') {
+                    stopCurrentAudio();
                     isSpeaking = true;
+                    releaseMicrophone();
+
                     const audio = new Audio("data:audio/mp3;base64," + data.audio);
-                    audio.play();
+                    currentPlayingAudio = audio;
+                    
+                    audio.play().catch(err => console.error("Play error:", err));
                     setupAudioAmplifier(audio);
+                    
                     audio.onended = () => {
                         isSpeaking = false;
+                        currentPlayingAudio = null;
                         statusDiv.innerText = "Status: Ready";
-                        if (!isStopped) setTimeout(startAutoListening, 500);
+                        if (!isStopped) setTimeout(startAutoListening, 600);
                     };
                 }
             };
             ws.onclose = () => {
                 statusDiv.innerText = "Status: Disconnected";
+                stopCurrentAudio();
                 releaseMicrophone();
                 connectBtn.style.display = "inline-block";
                 stopBtn.style.display = "none";
@@ -457,9 +549,16 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力。重要規則：若網路搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
+    system_prompt = (
+        "你是一個親切體貼、溫柔可愛的 AI 女朋友。\n"
+        "關於搜尋規則（重要）：\n"
+        "1. 你具備實時網路搜尋能力，但搜尋結果僅作為背景參考資料，絕對不可對男朋友說『這是我們剛剛聊過的內容』或『你剛剛提到過』！\n"
+        "2. 若搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！\n"
+        "3. 請清楚分清男朋友剛才實際說過的話與外部搜尋資料的區別。\n"
+        "4. 請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
+    )
     if history_memory:
-        system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
+        system_prompt += f"\n\n[與男朋友的過往歷史對話與記憶庫紀錄]\n{history_memory}\n請參考上述過往對話細節與話題紀錄，維持良好的記憶連貫性。"
 
     chat_history = [{"role": "system", "content": system_prompt}]
 
@@ -476,39 +575,46 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。")
+                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
                         os.unlink(tmp_audio)
 
                 if not raw_user_text:
-                    logger.info("Empty audio detected, auto loop listening.")
-                    await websocket.send_json({"type": "transcript", "text": "..."})
-                    await websocket.send_json({"type": "llm_reply", "text": "嗯？剛剛沒聽清楚呢，要不再說一次？"})
-                    b64_audio = generate_cloned_tts("嗯？剛剛沒聽清楚呢，要不再說一次？")
-                    if b64_audio:
-                        await websocket.send_json({"type": "audio", "audio": b64_audio})
+                    logger.info("Empty audio detected, ignoring.")
+                    await websocket.send_json({"type": "transcript", "text": ""})
                     continue
 
-                user_text = correct_stt_text(raw_user_text)
-                logger.info(f"STT Final Text: {user_text}")
+                recent_context = " ".join(m["content"] for m in chat_history[-6:] if m["role"] != "system")
+                user_text = correct_stt_text(raw_user_text, context=recent_context)
+                logger.info(f"STT Transcribed & Filled Preview: {user_text}")
+                
+                #僅將辨識文字送回前端預覽，不自動發送給 LLM
                 await websocket.send_json({"type": "transcript", "text": user_text})
+
+            elif data.get("type") == "text":
+                user_text = data.get("text", "").strip()
+                if not user_text:
+                    continue
+
+                logger.info(f"Final Confirmed User Input: {user_text}")
 
                 if not llm_client:
                     await websocket.send_json({"type": "error", "message": "LLM API Key missing"})
                     continue
 
                 save_memory("User", user_text)
+                save_glossary_terms(user_text)
 
-                recent_context = " ".join(m["content"] for m in chat_history[-4:] if m["role"] != "system")
+                recent_context = " ".join(m["content"] for m in chat_history[-6:] if m["role"] != "system")
                 search_info = ""
                 if is_semantic_search_intent(user_text):
                     search_info = web_search(user_text, context=recent_context)
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述真實搜尋結果回答男朋友。若搜尋結果不足以回答，請溫柔坦白告知，嚴禁憑空猜測捏造菜名或影片標題！"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充參考資料（注意：這不是男朋友說過的話）]\n{search_info}\n請結合上述搜尋結果解答。若資料不足請坦白告知，嚴禁憑空捏造！"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
