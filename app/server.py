@@ -36,7 +36,6 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-# 🔍 免費 DuckDuckGo 實時檢索
 def web_search(query: str) -> str:
     try:
         logger.info(f"Triggering DuckDuckGo Search for query: {query}")
@@ -49,11 +48,10 @@ def web_search(query: str) -> str:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
-# 🧠 方案 2：Smart Corrector 智能同音字與語境糾錯
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
-    prompt = f"請幫我糾正這段語音識別(STT)的繁體中文錯別字與同音字錯誤（例如：四川之共 -> 四川自貢，阿龐山 -> 阿龐師）。只返回修復後的正確文字，不要解釋：\n原句：{raw_text}"
+    prompt = f"你是一個專業的繁體中文語音識別(STT)糾錯助手。請將以下語音識別結果中的同音錯別字、簡體字、以及不合理的人名/地名（例如：網缸->王剛，四川之共->四川自貢）修正為正確的繁體中文。請只返回修正後的句子，不要有任何解釋：\n原句：{raw_text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -328,7 +326,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    segments, _ = stt_model.transcribe(tmp_audio, language="zh")
+                    # 強制 Whisper 使用繁體中文 initial_prompt 指引
+                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
@@ -343,7 +342,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_json({"type": "audio", "audio": b64_audio})
                     continue
 
-                # 方案 2：Smart Corrector 同音字與語意修復
+                # 方案 2：Smart Corrector 繁體同音字糾錯
                 user_text = correct_stt_text(raw_user_text)
                 logger.info(f"STT Final Text: {user_text}")
                 await websocket.send_json({"type": "transcript", "text": user_text})
@@ -352,9 +351,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": "LLM API Key missing"})
                     continue
 
-                # 方案 3：實時網路檢索 (包含特定人物、新聞、地點或不確定問題時自動搜尋)
+                # 方案 3：DuckDuckGo 實時檢索
                 search_info = ""
-                if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是"]):
+                if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是", "網紅", "廚師"]):
                     search_info = web_search(user_text)
 
                 current_messages = list(chat_history)
@@ -380,8 +379,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 if b64_audio:
                     await websocket.send_json({"type": "audio", "audio": b64_audio})
 
-    except WebSocketDisconnect:
-        logger.info("Client disconnected.")
+        except WebSocketDisconnect:
+            logger.info("Client disconnected.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8765)
