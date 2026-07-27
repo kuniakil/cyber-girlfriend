@@ -25,7 +25,6 @@ stt_model = WhisperModel("base", device="cpu", compute_type="int8", download_roo
 
 llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL) if LLM_API_KEY else None
 
-# 自動尋找掛載或預設的照片
 FACE_IMAGE_B64 = ""
 FACE_PATHS = ["/app/custom/face.png", "/app/custom/face.jpg", "/app/custom/cyber_girlfriend_face.png", "/tmp/cyber_girlfriend_face.png"]
 for path in FACE_PATHS:
@@ -85,7 +84,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         
         .main-stage { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; background: #050508; }
         .face-container { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
-        #realFace { height: 92vh; max-width: 95vw; object-fit: contain; border-radius: 20px; box-shadow: 0 0 50px rgba(255, 121, 198, 0.25); transition: transform 0.2s ease; }
+        #realFace { height: 92vh; max-width: 95vw; object-fit: contain; border-radius: 20px; box-shadow: 0 0 50px rgba(255, 121, 198, 0.25); }
 
         .top-bar { position: absolute; top: 20px; right: 20px; z-index: 10; display: flex; gap: 12px; align-items: center; }
         .btn { background: rgba(255, 121, 198, 0.85); color: #000; border: none; padding: 10px 20px; font-size: 14px; font-weight: bold; border-radius: 20px; cursor: pointer; backdrop-filter: blur(10px); transition: 0.2s; }
@@ -281,7 +280,7 @@ async def get_index():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Client connected.")
-    chat_history = [{"role": "system", "content": "你是一個親切體貼、溫柔可愛的 AI 女女朋友。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"}]
+    chat_history = [{"role": "system", "content": "你是一個親切體貼、溫柔可愛的 AI 女朋友。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"}]
 
     try:
         while True:
