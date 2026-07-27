@@ -40,10 +40,18 @@
 3. **[2026/07/27] 雙 Session 請求與聲音疊加自言自語**：
    - **現象**：語音自動發送一次、底部修正又發送一次；麥克風收錄 AI 喇叭回音形成死循環。
    - **修復**：改為語音僅預覽不自動發送，加入 `isSpeaking` 麥克風互斥鎖與 `stopCurrentAudio()` 強制切斷。
+4. **[2026/07/28] `cosine_similarity` NameError + 搜尋阻塞 event loop**：
+   - **現象 A**：`app/server.py:147` 內外層 `for a, b in zip(...)` 變數 shadowing，外層 `zip(v1, b)` 的 `b` 在第一次迭代時尚未綁定，每次呼叫直接 `NameError`。**自部署以來 Google embedding 語意路由完全失效**，僅 regex fallback 在運作；正因如此 `cosine_similarity` 雖在線但無人察覺。
+   - **現象 B**：`web_search` 內的 `DDGS().text(...)` 為同步 HTTP，在 async WebSocket handler 中直接呼叫會凍結整個 event loop。搜尋期間其他 client 連線 / 訊息都會被卡住。
+   - **修復 A**：dot product 改為單層 `sum(a * b for a, b in zip(v1, v2))`，並以四組標準向量（identical / orthogonal / opposite / 45°）通過驗證。
+   - **修復 B**：呼叫端改為 `await asyncio.to_thread(web_search, ...)`，丟到預設 thread pool 執行。
+   - **Commit**：`50cb89b` (pushed to main)，GHCR image 已重 build（run #30315538961, 2m55s）。
 
 ### ⏳ 待持續觀測與後續驗證事項 (Next Actions):
 - [ ] **長期個人化詞典準確度測試**：測試連續多天使用後，`user_glossary` 詞庫增量累積對同音異字（如莆田、阿胖山）自動校正的成功率。
 - [ ] **Intel iGPU (OpenVINO / IPEX)Whisper 推理加速**：進一步測試將 `small` / `medium` Whisper 模型綁定至 N100 Intel GPU (RenderD128) 推理，減輕 CPU 負擔。
+- [ ] **`is_semantic_search_intent` 同步呼叫**：內含 `get_google_embedding`（同步 urllib），目前沒包 thread，搜尋意圖判定時仍會輕微阻塞；可順手改為 `to_thread`。
+- [ ] **STT / LLM / TTS 其餘同步阻塞呼叫**：`correct_stt_text`、`generate_cloned_tts`、`stt_model.transcribe` (line 578) 仍為同步執行；Whisper CPU 推論 1–3 秒為最大卡頓源，等真正感受到多 client 並發卡頓時再批次改 async。
 
 ---
 
