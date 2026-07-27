@@ -114,11 +114,11 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot_product / (norm_v1 * norm_v2)
 
-SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識 最新"
+SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識 最新 阿胖山"
 SEARCH_ANCHOR_VEC = get_google_embedding(SEARCH_ANCHOR_TEXT) if GOOGLE_API_KEY else []
 
 def is_semantic_search_intent(text: str) -> bool:
-    patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"]
+    patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎", r"阿胖山"]
     has_pattern = any(re.search(p, text) for p in patterns)
     
     if not SEARCH_ANCHOR_VEC:
@@ -141,7 +141,7 @@ for path in FACE_PATHS:
 def extract_search_keyword(text: str, context: str = "") -> str:
     if not llm_client:
         return text
-    prompt = f"請結合對話上下文，從男朋友最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。如果句子中有代詞（如'他'、'這個'），請根據上下文替換為具體人名或主體。只返回空格分隔的關鍵字（例如: '阿龐 廚師 最新影片'），嚴禁包含數字列表或多餘說明：\n[對話上下文]\n{context}\n[最新一句話]\n{text}"
+    prompt = f"請結合對話上下文，從男朋友最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。如果句子中有代詞（如'他'、'這個'），請根據上下文替換為具體人名或主體。只返回空格分隔的關鍵字（例如: '阿胖山 山海燉 影片'），嚴禁包含數字列表或多餘說明：\n[對話上下文]\n{context}\n[最新一句話]\n{text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -173,6 +173,7 @@ def web_search(text: str, context: str = "") -> str:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
+# 正名修復：支持 阿胖山 與 山海燉 相關美食詞彙
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
@@ -181,7 +182,7 @@ def correct_stt_text(raw_text: str) -> str:
         "請幫我將以下由語音轉文字產生的原始內容進行修飾：\n"
         "1. 修正錯別字並補上適當的繁體中文標點符號。\n"
         "2. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」、「那」等）。\n"
-        "3. 修正專有名詞（例如：K8s, Pod, K3s, N100, Immich, Docker, Mac, YouTube, 王剛, 阿龐, 丼飯, 山海丼 等，請保留原英文縮寫與正確大小寫與繁體中文正字）。\n"
+        "3. 修正專有名詞（例如：K8s, Pod, K3s, N100, Immich, Docker, Mac, YouTube, 王剛, 阿胖山, 山海燉, 山海燴, 丼飯 等，請保留原英文縮寫與正確大小寫與繁體中文正字）。\n"
         "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言、解釋或額外回應。直接輸出修正後的最終文字。\n\n"
         f"原始內容：{raw_text}\n"
         "修正後的內容："
@@ -193,7 +194,7 @@ def correct_stt_text(raw_text: str) -> str:
             max_tokens=80
         )
         corrected = res.choices[0].message.content.strip()
-        logger.info(f"STT Correction (mac-voice-input Golden Prompt): '{raw_text}' -> '{corrected}'")
+        logger.info(f"STT Correction (Correct Name Prompt): '{raw_text}' -> '{corrected}'")
         return corrected
     except Exception as e:
         logger.error(f"STT correction failed: {e}")
@@ -466,8 +467,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    # 指引 Whisper 繁體中文對話與日式丼飯熱詞
-                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話，包含阿龐、丼飯、山海丼等常見詞彙。")
+                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話，包含阿胖山、山海燉等常見美食詞彙。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
