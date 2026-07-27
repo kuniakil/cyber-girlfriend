@@ -1,38 +1,49 @@
 # 📋 Cyber Girlfriend (賽博女友) 開發與任務紀錄
 
-本文檔記錄 **Cyber Girlfriend** 專案 v1.5 / v2.0 的完成事項與目前 Debug 調優進度。
+本文檔記錄 **Cyber Girlfriend** 專案 v1.5 / v1.7 / v2.0 的完成事項與持續 Debug 調優歷程。
 
 ---
 
-## 🎉 v1.5 完成與最新實裝功能 (Implemented Features)
+## 🎉 v1.7 最新完成與調優事項 (Implemented & Debugged Features)
 
 - [x] **SQLite 本地持久化長期記憶 (Long-Term Memory)**
   - 於 `/app/custom/girlfriend_memory.db` 建立 SQLite 記憶庫，對話上下文自動持久化存儲於 N100 宿主機。
 - [x] **Google `text-embedding-004` 語意向量意圖路由器 (Semantic Intent Router)**
-  - 計算用戶話語與搜尋錨點的餘弦相似度 (Cosine Similarity)，當 Score > 0.45 時自動觸發 DuckDuckGo 網路搜尋。
-  - 具備 Google API 網路波動時的雙重容錯降級機制 (Hybrid Fallback Matcher)。
-- [x] **mac-voice-input 黃金 Prompt 移植 (Typeless Style STT Correction)**
+  - 計算用戶話語與搜尋錨點的餘弦相似度 (Cosine Similarity)，門檻值調優至 0.65，避免一般對話誤觸發外部搜尋。
+- [x] **Typeless Style STT 語意與個人化字典修正**
   - 移植來自 `mac-voice-input` 的極速語音輸入法修正 Prompt。
   - 自動過濾口語贅字（「呃/然後/對」），自動完成繁體標點符號與語意修飾。
-- [x] **純動態拼字說明與無硬編碼泛化架構 (Generic Dynamic Architecture)**
-  - 徹底移除所有程式碼硬寫死的名詞（如「阿龐/阿胖山/山海燉」）。
-  - 升級 Prompt 支持動態拆字/字形說明解讀（例如「胖是肥胖的胖，山是山脈的山」），自動拼寫正確正字。
-  - 搜尋關鍵字提煉自動針對 YouTube / 網紅 / 影片補充 `YouTube` 搜尋詞與 `title` 資訊。
+- [x] **個人化動態詞彙適應與自動學習機制 (User Glossary DB Learning)**
+  - 於 SQLite 建立 `user_glossary` 資料表。
+  - 自動捕捉並儲存使用者發送與修正的名詞（如：`阿胖山`、`福建莆田`、`劉偉元`）。
+  - 將專屬熱詞動態注入 STT 糾錯 Prompts 中，實現「越用越懂你、錯誤率越來越低」的增量學習。
+- [x] **Whisper `small` 模型升級與 CPU 多執行緒加速**
+  - 將 `base` 模型升級為 `small` (int8 量化)，並配置 `cpu_threads=4` 平行運算，大幅提升地方地名與罕見俚語的原始辨識率。
+- [x] **UI 雙模輸入與語音預覽機制 (Single Session Fix)**
+  - 語音辨識出文字後僅在底部輸入框填入預覽，不自動送給 LLM。
+  - 使用者可使用 `Typeless` 或鍵盤修正字詞後發送，確保每輪發言為唯一 Session，解決雙發送與雞同鴨講問題。
+- [x] **音訊播放互斥鎖與單一 Session 播放保護 (Audio Mutual Exclusion Lock)**
+  - AI 播放 TTS 時自動切斷麥克風並暫停 VAD 靜音檢測，播放完畢延遲 600ms 恢復，徹底杜絕喇叭殘音被錄入導致自言自語的迴圈。
+  - 前端播放新音訊前自動切斷舊 Audio 物件，確保同時間僅有單一聲音播放。
 
 ---
 
-## 🛠️ 目前 Debug 調優進度紀錄 (Debug Progress - 2026/07/27)
+## 🛠️ Debug 與問題排查歷程紀錄 (Continuous Debugging Log)
 
 ### 📌 已完成排查與修復 (Resolved Issues):
-1. **Google Embedding 404 URL 修復**：修復 `text-embedding-004` REST endpoint 格式。
-2. **上下文關鍵字提煉代詞指代問題**：修復「他今天發表的影片是什麼」無法指代上文主體的問題，現在提取器會帶入對話 Context 提煉完整搜尋詞（例如 `阿胖山 YouTube 最新影片`）。
-3. **LLM 憑空捏造 (Hallucination) 防護**：硬性規定當 DuckDuckGo 摘要無具體標題時，LLM 必須實話實說，嚴禁憑空猜測標題或菜名。
-4. **SQLite 髒記憶擦除**：已於 N100 宿主機清除舊版測試殘留的胡編亂造記憶檔 (`girlfriend_memory.db`)。
+1. **[2026/07/27] 搜尋與對話記憶混淆/記憶斷層**：
+   - **現象**：問「談過什麼」，AI 回覆無法記錄對話；搜尋外部資料（如小高姐）後，誤說成「我們剛才談過小高姐」。
+   - **修復**：隔離 LLM Prompt 中的「實時網路搜尋補充參考資料」與「對話 Session Context」，明確規定搜尋結果不得當作用戶講過的話。
+2. **[2026/07/27] 語音錯字修正（福建莆田 ➔ 浮沉浮沉）**：
+   - **現象**：STT 將莆田辨識為「浮填」，LLM 糾錯寫成「浮沉浮沉」。
+   - **修復**：升級模型至 `small`，改進 STT 糾錯 Prompt，加入常見地名、姓名防混淆邏輯，並啟動 `user_glossary` 自動學習。
+3. **[2026/07/27] 雙 Session 請求與聲音疊加自言自語**：
+   - **現象**：語音自動發送一次、底部修正又發送一次；麥克風收錄 AI 喇叭回音形成死循環。
+   - **修復**：改為語音僅預覽不自動發送，加入 `isSpeaking` 麥克風互斥鎖與 `stopCurrentAudio()` 強制切斷。
 
-### ⏳ 明天待繼續測試與驗證事項 (Next Actions for Tomorrow):
-1. **實測真實 YouTube 影片搜尋**：連線 `https://gf.3pm.lol` 測試詢問熱門與長尾 YouTuber（如「阿胖山 山海燉」或最新影片），驗證 DuckDuckGo 摘要擷取與 LLM 回覆準確度。
-2. **測試拼字口述修正**：測試對著麥克風講「A是XX的A，B是YY的B」時，Typeless 語義修正層是否能 100% 動態拼出正字。
-3. **長時記憶連貫性調優**：觀察多輪對話後 SQLite 歷史記憶是否乾淨、無污染。
+### ⏳ 待持續觀測與後續驗證事項 (Next Actions):
+- [ ] **長期個人化詞典準確度測試**：測試連續多天使用後，`user_glossary` 詞庫增量累積對同音異字（如莆田、阿胖山）自動校正的成功率。
+- [ ] **Intel iGPU (OpenVINO / IPEX)Whisper 推理加速**：進一步測試將 `small` / `medium` Whisper 模型綁定至 N100 Intel GPU (RenderD128) 推理，減輕 CPU 負擔。
 
 ---
 
