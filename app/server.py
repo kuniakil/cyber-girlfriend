@@ -82,7 +82,7 @@ stt_model = WhisperModel("base", device="cpu", compute_type="int8", download_roo
 
 llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL) if LLM_API_KEY else None
 
-# 🧠 Google Gemini Embedding 向量生成器 (text-embedding-004)
+# 🧠 修復 Google Gemini Embedding REST Endpoint (text-embedding-004)
 def get_google_embedding(text: str) -> List[float]:
     if not GOOGLE_API_KEY:
         return []
@@ -103,10 +103,10 @@ def get_google_embedding(text: str) -> List[float]:
             res = json.loads(response.read().decode("utf-8"))
             return res.get("embedding", {}).get("values", [])
     except Exception as e:
+        # 降級嘗試 embedding-001 或記錄錯誤
         logger.error(f"Google Embedding API Error: {e}")
         return []
 
-# 餘弦相似度計算 (Cosine Similarity)
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
@@ -117,21 +117,21 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot_product / (norm_v1 * norm_v2)
 
-# 搜尋意圖基準錨點向量 (Anchor Vector for Search Intent)
+# 搜尋意圖基準錨點向量
 SEARCH_ANCHOR_TEXT = "查詢網路最新消息 新聞 搜尋特定人物 YouTuber 廚師 影片 天氣 知識"
 SEARCH_ANCHOR_VEC = get_google_embedding(SEARCH_ANCHOR_TEXT) if GOOGLE_API_KEY else []
 
 def is_semantic_search_intent(text: str) -> bool:
+    patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"]
+    has_pattern = any(re.search(p, text) for p in patterns)
+    
     if not SEARCH_ANCHOR_VEC:
-        # Fallback 到關鍵字
-        patterns = [r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"]
-        return any(re.search(p, text) for p in patterns)
+        return has_pattern
     
     vec = get_google_embedding(text)
     sim = cosine_similarity(vec, SEARCH_ANCHOR_VEC)
     logger.info(f"Google Semantic Search Score for '{text}': {sim:.4f}")
-    # 分數大於 0.52 即判定為具備語意查詢意圖
-    return sim > 0.52
+    return sim > 0.50 or has_pattern
 
 FACE_IMAGE_B64 = ""
 FACE_PATHS = ["/app/custom/face.png", "/app/custom/face.jpg", "/app/custom/cyber_girlfriend_face.png", "/tmp/cyber_girlfriend_face.png"]
@@ -482,7 +482,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 save_memory("User", user_text)
 
-                # Google Gemini 語意向量意圖檢索 (Semantic Vector Router)
                 search_info = ""
                 if is_semantic_search_intent(user_text):
                     search_info = web_search(user_text)
