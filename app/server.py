@@ -138,7 +138,6 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-# 完全基於動態語意與上下文的關鍵字提煉器（零硬編碼名詞）
 def extract_search_keyword(text: str, context: str = "") -> str:
     if not llm_client:
         return text
@@ -146,8 +145,8 @@ def extract_search_keyword(text: str, context: str = "") -> str:
         "你是一個智能搜尋關鍵字提煉助手。\n"
         "請結合對話上下文，從使用者最新說的話中，提煉出適合 DuckDuckGo 搜尋的 2-3 個精準關鍵字。\n"
         "注意事項：\n"
-        "1. 如果使用者正在矯正特定字詞（例如：'胖是肥胖的胖'），請根據其補充說明拼出正確的專有名詞/人名。\n"
-        "2. 如果句子包含代詞（如'他'、'這個'），請結合上下文替換為明確的主體與專有名詞。\n"
+        "1. 如果使用者正在進行字形說明（例如'胖是肥胖的胖，山是山脈的山'），請將其組合為精準中文字詞（例如：阿胖山）。\n"
+        "2. 若話題涉及影片、YouTuber、網紅，請務必包含 'YouTube' 關鍵字。\n"
         "3. 只返回空格分隔的精準關鍵字，嚴禁包含數字列表或多餘說明文字。\n\n"
         f"[對話上下文]\n{context}\n\n"
         f"[最新話語]\n{text}"
@@ -172,18 +171,18 @@ def web_search(text: str, context: str = "") -> str:
         logger.info(f"Triggering DuckDuckGo Search for: {query}")
         results = []
         with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=3):
+            for r in ddgs.text(query, max_results=4):
                 body = r.get("body", "")
-                if body and not any(junk in body.lower() for junk in ["jailbreak", "chatgpt dan", "collabor"]):
-                    results.append(body)
+                title = r.get("title", "")
+                if body and not any(junk in body.lower() for junk in ["jailbreak", "chatgpt dan", "collabor", "提供方需確保"]):
+                    results.append(f"【{title}】{body}")
         res_str = "\n".join(results)
-        logger.info(f"DuckDuckGo Search Results Snippet: {res_str[:120]}...")
+        logger.info(f"DuckDuckGo Search Results Snippet: {res_str[:150]}...")
         return res_str
     except Exception as e:
         logger.error(f"DuckDuckGo search error: {e}")
         return ""
 
-# 完全通用的語意與拼字說明修正助手（零寫死具體名詞）
 def correct_stt_text(raw_text: str) -> str:
     if not llm_client or len(raw_text) < 2:
         return raw_text
@@ -191,7 +190,7 @@ def correct_stt_text(raw_text: str) -> str:
         "你是一個極速語音輸入法的後端修正助手（類似 Typeless 語意與拼字修正）。\n"
         "請幫我將以下由語音轉文字產生的原始內容進行修正：\n"
         "1. 修正錯別字並補上適當的繁體中文標點符號。\n"
-        "2. 若使用者正在進行字形/拆字說明（例如'A是XX的A，B是YY的B'），請根據說明將該名詞拼寫為正確的繁體中文字詞。\n"
+        "2. 若使用者正在進行字形/拆字說明（例如'胖是肥胖的胖，山是山脈的山'），請根據說明將該名詞拼寫為正確的中文字詞（例如：阿胖山）。\n"
         "3. 去除語氣詞和贅字（例如：「呃」、「然後」、「對」等）。\n"
         "4. 保持原本的口吻與語意，僅做修飾，不要加入任何引言或額外回應。直接輸出修正後的最終文字。\n\n"
         f"原始內容：{raw_text}\n"
@@ -204,7 +203,7 @@ def correct_stt_text(raw_text: str) -> str:
             max_tokens=80
         )
         corrected = res.choices[0].message.content.strip()
-        logger.info(f"STT Correction (Dynamic Generic Prompt): '{raw_text}' -> '{corrected}'")
+        logger.info(f"STT Correction (Typeless Generic Prompt): '{raw_text}' -> '{corrected}'")
         return corrected
     except Exception as e:
         logger.error(f"STT correction failed: {e}")
@@ -458,7 +457,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女女朋友。你具備實時網路搜尋能力。重要規則：若網路搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力。重要規則：若網路搜尋結果未包含明確真實資訊，請實話實說，嚴禁憑空捏造菜名、影片標題或虛假事實！請使用繁體中文回答，口氣自然輕鬆，控制在兩至三句話內。"
     if history_memory:
         system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
 
