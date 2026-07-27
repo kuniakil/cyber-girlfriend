@@ -5,7 +5,9 @@ import os
 import tempfile
 import base64
 import urllib.request
+import sqlite3
 import re
+from typing import List, Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
@@ -22,6 +24,62 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "MiniMax-Text-01")
 WHISPER_DIR = os.environ.get("WHISPER_MODEL_DIR", "/app/models/whisper")
 VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "cyber_girlfriend_custom_v1")
 
+# SQLite 長期記憶資料庫初始化
+DB_PATH = "/app/custom/girlfriend_memory.db"
+if not os.path.exists(os.path.dirname(DB_PATH)):
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            role TEXT,
+            content TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+    logger.info("SQLite Long-Term Memory DB initialized successfully!")
+
+init_db()
+
+# 🗄️ 儲存對話到 SQLite 資料庫
+def save_memory(role: str, content: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO memories (role, content) VALUES (?, ?)", (role, content))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Save memory error: {e}")
+
+# 🔍 SQLite 語意相關記憶搜尋 (RAG Memory Retrieval)
+def search_memory(query: str) -> str:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # 取出最近與最相關的對話紀錄
+        cursor.execute("SELECT role, content FROM memories ORDER BY id DESC LIMIT 20")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not rows:
+            return ""
+        
+        # 簡單相關字過濾與檢索
+        relevant = []
+        for role, content in reversed(rows):
+            relevant.append(f"{role}: {content}")
+        
+        return "\n".join(relevant)
+    except Exception as e:
+        logger.error(f"Search memory error: {e}")
+        return ""
+
 logger.info(f"Loading faster-whisper (base, int8)...")
 stt_model = WhisperModel("base", device="cpu", compute_type="int8", download_root=WHISPER_DIR)
 
@@ -36,11 +94,10 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-# 提取精準搜尋關鍵字
 def extract_search_keyword(text: str) -> str:
     if not llm_client:
         return text
-    prompt = f"請從以下句子中，提取出最適合作網頁搜尋的 2-3 個精準關鍵字（例如：'你有聽過四川自貢的廚師王剛嗎' -> '四川自貢 廚師 王剛'）。只返回關鍵字，不要有額外說明：\n{text}"
+    prompt = f"請從以下句子中，提取出最適合作網頁搜尋的 2-3 個精準關鍵字。只返回關鍵字，不要有額外說明：\n{text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
@@ -48,7 +105,6 @@ def extract_search_keyword(text: str) -> str:
             max_tokens=30
         )
         kw = res.choices[0].message.content.strip()
-        logger.info(f"Extracted Search Keywords: '{kw}'")
         return kw
     except Exception as e:
         return text
@@ -64,7 +120,6 @@ def web_search(text: str) -> str:
                 if body:
                     results.append(body)
         res_str = "\n".join(results)
-        logger.info(f"DuckDuckGo Raw Results Snippet: {res_str[:120]}...")
         return res_str
     except Exception as e:
         logger.error(f"DuckDuckGo search error: {e}")
@@ -131,7 +186,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Cyber Girlfriend v1.0</title>
+    <title>Cyber Girlfriend v1.5 with Memory</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #000; color: #fff; text-align: center; margin: 0; padding: 0; overflow: hidden; height: 100vh; display: flex; justify-content: center; align-items: center; }
         
@@ -164,7 +219,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div class="subtitles-overlay">
             <div id="userText" class="sub-user">👤 (Click Connect to talk)</div>
-            <div id="agentText" class="sub-agent">💕 Cyber Girlfriend v1.0 Ready...</div>
+            <div id="agentText" class="sub-agent">💕 Cyber Girlfriend v1.5 with SQLite Memory Ready...</div>
         </div>
     </div>
 
@@ -333,7 +388,14 @@ async def get_index():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Client connected.")
-    chat_history = [{"role": "system", "content": "你是一個親切體貼、溫柔可愛的 AI 女朋友。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"}]
+    
+    # 從 SQLite 撈取歷史記憶作為初始化背景
+    history_memory = search_memory("")
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
+    if history_memory:
+        system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
+
+    chat_history = [{"role": "system", "content": system_prompt}]
 
     try:
         while True:
@@ -371,7 +433,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": "LLM API Key missing"})
                     continue
 
-                # 判定觸發搜尋邏輯 (遇到特定問句、人名、地點、網紅、廚師等自動檢索)
+                # 寫入使用者對話至 SQLite 長期記憶
+                save_memory("User", user_text)
+
                 search_info = ""
                 if any(kw in user_text for kw in ["是誰", "知道", "聽過", "新聞", "天氣", "哪裡", "什麼是", "網紅", "廚師", "阿龐", "王剛", "阿胖"]):
                     search_info = web_search(user_text)
@@ -388,6 +452,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     max_tokens=150
                 )
                 reply_text = res.choices[0].message.content.strip()
+
+                # 寫入女友對話至 SQLite 長期記憶
+                save_memory("Girlfriend", reply_text)
 
                 chat_history.append({"role": "user", "content": user_text})
                 chat_history.append({"role": "assistant", "content": reply_text})
