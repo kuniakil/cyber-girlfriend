@@ -1,0 +1,17 @@
+.env
+.secrets.env
+*.env
+*.pem
+*.key
+custom_assets/
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+.git
+.gitignore
+.dockerignore
+__pycache__/
+*.py[cod]
+.DS_Store

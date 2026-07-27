@@ -1,0 +1,28 @@
+# Environment and Secrets
+.env
+.secrets.env
+*.env
+*.pem
+*.key
+
+# Personal Media and Custom Assets
+custom_assets/
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+
+# Python and System Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+env/
+venv/
+
+# IDE and OS files
+.DS_Store
+.vscode/
+.idea/

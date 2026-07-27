@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  cyber-girlfriend:
+    image: ghcr.io/kuniakil/cyber-girlfriend:latest
+    container_name: cyber-girlfriend
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - MINIMAX_API_KEY=your_minimax_api_key_here
+      - LLM_MODEL=MiniMax-Text-01
+      - MINIMAX_VOICE_ID=cyber_girlfriend_custom_v1
+    volumes:
+      # 掛載你自己的照片與語音檔
+      - ./custom_assets/face.png:/app/custom/face.png
+      - ./whisper-models:/app/models/whisper
