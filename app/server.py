@@ -89,26 +89,34 @@ for path in FACE_PATHS:
         logger.info(f"Face Image Loaded from {path}!")
         break
 
-# 智能判定是否需要連網搜尋，並回傳搜尋關鍵字
-def get_search_intent_and_keyword(text: str) -> str:
+# 🧠 語意意圖路由器 (Semantic Intent Router)：精準過濾搜尋需求
+SEARCH_PATTERNS = [
+    r"搜尋", r"查一下", r"查詢", r"最新", r"新聞", r"天氣", r"影片", r"熱門", r"網紅", r"是誰", r"什麼是", r"知道.*嗎", r"聽過.*嗎"
+]
+
+def is_search_intent(text: str) -> bool:
+    for pattern in SEARCH_PATTERNS:
+        if re.search(pattern, text):
+            return True
+    return False
+
+def extract_search_keyword(text: str) -> str:
     if not llm_client:
-        return ""
-    prompt = f"請分析以下句子是否需要進行實時網頁搜尋（如查詢最新資訊、新聞、人物、影片、天氣、搜尋需求等）。如果需要，請只返回 2-3 個精準搜尋關鍵字；如果不需要，請回答 'NO'：\n句子：{text}"
+        return text
+    prompt = f"請從以下句子中，提取出 2-3 個最適合作網頁搜尋的精準關鍵字。只返回關鍵字，不要有說明：\n{text}"
     try:
         res = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=30
         )
-        ans = res.choices[0].message.content.strip()
-        if "NO" in ans.upper() or len(ans) > 25:
-            return ""
-        return ans
+        return res.choices[0].message.content.strip()
     except Exception as e:
-        return ""
+        return text
 
-def web_search(query: str) -> str:
+def web_search(text: str) -> str:
     try:
+        query = extract_search_keyword(text)
         logger.info(f"Triggering DuckDuckGo Search for: {query}")
         results = []
         with DDGS() as ddgs:
@@ -388,7 +396,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Client connected.")
     
     history_memory = search_memory("")
-    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋功能，請勿向男朋友宣稱你無法連網。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
+    system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。你具備實時網路搜尋能力，當接收到搜尋資料時請結合資料回答。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
     if history_memory:
         system_prompt += f"\n\n[與男朋友的過往記憶紀錄]\n{history_memory}\n請記住上述過往細節，保持自然的對話連貫性。"
 
@@ -432,15 +440,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 save_memory("User", user_text)
 
-                # 智能判定搜尋意圖並提取關鍵字
-                search_kw = get_search_intent_and_keyword(user_text)
+                # 語意意圖路由器 (0 毫秒高效過濾)
                 search_info = ""
-                if search_kw:
-                    search_info = web_search(search_kw)
+                if is_search_intent(user_text):
+                    search_info = web_search(user_text)
 
                 current_messages = list(chat_history)
                 if search_info:
-                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋結果中提到的資訊內容回答男朋友，展現你剛剛上網查到的知識！"})
+                    current_messages.append({"role": "system", "content": f"[實時網路搜尋補充資訊]\n{search_info}\n請結合上述搜尋結果回答男朋友，展現你剛剛上網查到的知識！"})
                 
                 current_messages.append({"role": "user", "content": user_text})
 
