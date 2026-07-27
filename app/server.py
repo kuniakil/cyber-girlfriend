@@ -24,7 +24,6 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "MiniMax-Text-01")
 WHISPER_DIR = os.environ.get("WHISPER_MODEL_DIR", "/app/models/whisper")
 VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "cyber_girlfriend_custom_v1")
 
-# SQLite 長期記憶資料庫初始化
 DB_PATH = "/app/custom/girlfriend_memory.db"
 if not os.path.exists(os.path.dirname(DB_PATH)):
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -46,7 +45,6 @@ def init_db():
 
 init_db()
 
-# 🗄️ 儲存對話到 SQLite 資料庫
 def save_memory(role: str, content: str):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -57,20 +55,17 @@ def save_memory(role: str, content: str):
     except Exception as e:
         logger.error(f"Save memory error: {e}")
 
-# 🔍 SQLite 語意相關記憶搜尋 (RAG Memory Retrieval)
 def search_memory(query: str) -> str:
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # 取出最近與最相關的對話紀錄
-        cursor.execute("SELECT role, content FROM memories ORDER BY id DESC LIMIT 20")
+        cursor.execute("SELECT role, content FROM memories ORDER BY id DESC LIMIT 15")
         rows = cursor.fetchall()
         conn.close()
         
         if not rows:
             return ""
         
-        # 簡單相關字過濾與檢索
         relevant = []
         for role, content in reversed(rows):
             relevant.append(f"{role}: {content}")
@@ -219,7 +214,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         <div class="subtitles-overlay">
             <div id="userText" class="sub-user">👤 (Click Connect to talk)</div>
-            <div id="agentText" class="sub-agent">💕 Cyber Girlfriend v1.5 with SQLite Memory Ready...</div>
+            <div id="agentText" class="sub-agent">💕 Cyber Girlfriend v1.5 Ready...</div>
         </div>
     </div>
 
@@ -389,7 +384,6 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Client connected.")
     
-    # 從 SQLite 撈取歷史記憶作為初始化背景
     history_memory = search_memory("")
     system_prompt = "你是一個親切體貼、溫柔可愛的 AI 女朋友。請使用繁體中文回答，口氣自然輕鬆、帶有一點關心，回答請簡短控制在兩至三句話內。"
     if history_memory:
@@ -433,7 +427,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type": "error", "message": "LLM API Key missing"})
                     continue
 
-                # 寫入使用者對話至 SQLite 長期記憶
                 save_memory("User", user_text)
 
                 search_info = ""
@@ -453,7 +446,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
                 reply_text = res.choices[0].message.content.strip()
 
-                # 寫入女友對話至 SQLite 長期記憶
                 save_memory("Girlfriend", reply_text)
 
                 chat_history.append({"role": "user", "content": user_text})
@@ -466,8 +458,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 if b64_audio:
                     await websocket.send_json({"type": "audio", "audio": b64_audio})
 
-        except WebSocketDisconnect:
-            logger.info("Client disconnected.")
+    except WebSocketDisconnect:
+        logger.info("Client disconnected.")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8765)
