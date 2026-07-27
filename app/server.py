@@ -144,7 +144,7 @@ def get_google_embedding(text: str) -> List[float]:
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     if not v1 or not v2 or len(v1) != len(v2):
         return 0.0
-    dot_product = sum(a * b for a, b in zip(v1, b) for a, b in zip(v1, v2))
+    dot_product = sum(a * b for a, b in zip(v1, v2))
     norm_v1 = math.sqrt(sum(a * a for a in v1))
     norm_v2 = math.sqrt(sum(b * b for b in v2))
     if norm_v1 == 0 or norm_v2 == 0:
@@ -610,7 +610,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 recent_context = " ".join(m["content"] for m in chat_history[-6:] if m["role"] != "system")
                 search_info = ""
                 if is_semantic_search_intent(user_text):
-                    search_info = web_search(user_text, context=recent_context)
+                    search_info = await asyncio.to_thread(web_search, user_text, context=recent_context)
 
                 current_messages = list(chat_history)
                 if search_info:
