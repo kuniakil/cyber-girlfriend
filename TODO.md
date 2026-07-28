@@ -55,6 +55,47 @@
 
 ---
 
+## 🏠 維護與清理 (Housekeeping — 專案穩定後執行)
+
+### GHCR Image Versions 清理計畫
+
+**時機**：等專案穩定後（建議第一個正式 release / v1.0.0 階段）做一次「實驗性清理」。
+
+**目前狀態**（2026-07-28）：25 個 image version 累積，1 個有 `latest` tag（k3s 在用），24 個 untagged 或 stale。
+
+**清理步驟**（事後被雷過的標準做法）：
+
+1. **打開**：https://github.com/kuniakil/cyber-girlfriend/pkgs/container/cyber-girlfriend/versions
+2. **視覺確認 KEEP 清單**：
+   - 目前有 `latest` tag 的那個（跑中 pod 在用）
+   - 任何將來想保留的 explicit `v*.*.*` tag
+3. **逐個砍**（不要批次）：
+   - 點右邊 kebab menu → Delete version
+   - **砍之前先把 digest 抄下來**（30 天內可從 Settings > Packages > Deleted > Restore 救回）
+4. **砍一個、驗證一次**：
+   - 砍完跑 `kubectl rollout restart deployment/voice-agent -n voice-agent`
+   - 確認 pod 拉得到 image（沒有的話 30 天內 restore）
+5. **預期結果**：
+   - **順利**：以後知道怎麼清，**把這個程序記下來**
+   - **失敗**：剛好把累積的「亂七八糟」都清掉，**順便做一個穩定版 image**，乾淨重來
+
+**安全網**：
+- GHCR 官方文件確認：**砍掉的 version 30 天內可 restore**
+- 30 天過後就真的沒了，要回滾只能 `git checkout` 舊 commit + 重新 build
+
+**為什麼不現在砍**：
+- 還在頻繁 debug，隨時可能需要 rollback 到舊 image 測試
+- 砍錯的後果在 debug 階段是不可接受的（會打斷正在進行的修復）
+- 25 個 version 累積沒爆炸，GHCR 應該有某種 GC（雖然沒公開文件保證）
+
+**觀察佐證 GHCR 有 GC**：累積 25 個 image version 從未被通知超量 → 大型 registry 不可能完全沒 GC。
+
+**參考資料**：
+- 官方文件：[Deleting and restoring a package](https://docs.github.com/en/packages/learn-github-packages/deleting-and-storing-a-package) — 30 天 restore window 條款出處
+- 設計決策：見 commit `a092383` (workflow 改手動 trigger) 與 `d4c1dda` (deployment 改 `:latest`)
+
+---
+
 ## 🔮 v2.0 待辦與升級規劃 (TODO for v2.0)
 
 - [ ] **Wav2Lip / LivePortrait 3D 動態驅動**
