@@ -115,6 +115,16 @@ def search_memory(query: str) -> str:
         return ""
 
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
+logger.info(f"WHISPER_DEVICE env var = {WHISPER_DEVICE!r} (auto/gpu/openvino=try GPU+fallback, cpu=force CPU)")
+
+# Probe GPU device visibility inside container before attempting to use it
+import os as _os
+_render_gid = _os.environ.get("RENDER_GID", "n/a")
+try:
+    _dri_entries = sorted(_os.listdir("/dev/dri")) if _os.path.isdir("/dev/dri") else []
+except Exception:
+    _dri_entries = []
+logger.info(f"GPU device probe: /dev/dri entries = {_dri_entries} (render GID in container = {_render_gid})")
 
 ort_stt_pipeline = None
 stt_model = None
@@ -122,29 +132,38 @@ stt_model = None
 try:
     import onnxruntime as ort
     providers = ort.get_available_providers()
+    logger.info(f"ONNXRuntime version: {ort.__version__}")
     logger.info(f"ONNXRuntime Available Providers: {providers}")
-    if "OpenVINOExecutionProvider" in providers and WHISPER_DEVICE in ["auto", "gpu", "openvino"]:
+    if WHISPER_DEVICE == "cpu":
+        logger.info("WHISPER_DEVICE=cpu, skipping GPU path (forced CPU mode).")
+    elif "OpenVINOExecutionProvider" not in providers:
+        logger.warning("OpenVINOExecutionProvider NOT available in onnxruntime → falling back to faster-whisper CPU.")
+    elif WHISPER_DEVICE not in ["auto", "gpu", "openvino"]:
+        logger.warning(f"WHISPER_DEVICE={WHISPER_DEVICE!r} not in [auto, gpu, openvino] → skipping GPU path.")
+    else:
         from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
         from transformers import AutoProcessor, pipeline
         model_id = f"openai/whisper-{WHISPER_MODEL_SIZE}"
-        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU...")
+        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU (device_type=GPU_FP16)...")
         provider_options = {"device_type": "GPU_FP16"}
         ort_model = ORTModelForSpeechSeq2Seq.from_pretrained(
-            model_id, 
-            export=True, 
+            model_id,
+            export=True,
             provider="OpenVINOExecutionProvider",
             provider_options=provider_options
         )
         processor = AutoProcessor.from_pretrained(model_id)
         ort_stt_pipeline = pipeline(
-            "automatic-speech-recognition", 
-            model=ort_model, 
-            tokenizer=processor.tokenizer, 
+            "automatic-speech-recognition",
+            model=ort_model,
+            tokenizer=processor.tokenizer,
             feature_extractor=processor.feature_extractor
         )
         logger.info("ONNXRuntime Intel GPU (OpenVINOExecutionProvider) Whisper pipeline successfully loaded!")
+except ImportError as ie:
+    logger.warning(f"GPU path ImportError ({ie}) — likely missing `transformers` or `optimum[onnxruntime]`. Falling back to faster-whisper CPU.")
 except Exception as ort_err:
-    logger.warning(f"ONNXRuntime GPU initialization failed or skipped ({ort_err}), using faster-whisper CPU.")
+    logger.warning(f"ONNXRuntime GPU initialization failed ({type(ort_err).__name__}: {ort_err}), falling back to faster-whisper CPU. (No Intel GPU acceleration will be used.)")
 
 logger.info(f"Loading faster-whisper ({WHISPER_MODEL_SIZE}, int8, cpu_threads=4)...")
 stt_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4, download_root=WHISPER_DIR)

@@ -1,6 +1,8 @@
 FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LIBVA_DRIVER_NAME=iHD
+ENV OPENVINO_LOG_LEVEL=1
 
 # Install base system packages (python3, ffmpeg, OpenCL loader)
 RUN apt-get update && apt-get install -y \
@@ -41,6 +43,7 @@ RUN pip install --no-cache-dir \
     openai \
     duckduckgo_search \
     optimum[onnxruntime] \
+    transformers \
     && pip uninstall -y onnxruntime \
     && pip install --no-cache-dir onnxruntime-openvino
 
