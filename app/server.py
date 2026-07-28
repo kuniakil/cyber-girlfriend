@@ -144,8 +144,13 @@ try:
         from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
         from transformers import AutoProcessor, pipeline
         model_id = f"openai/whisper-{WHISPER_MODEL_SIZE}"
-        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU (device_type=GPU, precision=FP16)...")
-        provider_options = {"device_type": "GPU", "precision": "FP16"}
+        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU (HETERO: GPU → CPU fallback per subgraph)...")
+        # HETERO mode: OpenVINO splits the model into subgraphs and routes each one to
+        # the first device that can build a working OpenCL kernel for it. Subgraphs that
+        # fail GPU kernel compilation (e.g. Whisper decoder's dynamic-shape ops on N100
+        # iGPU) get automatically routed to CPU. The encoder (audio → hidden states)
+        # typically succeeds on GPU and runs there.
+        provider_options = {"device_type": "HETERO:GPU,CPU"}
         ort_model = ORTModelForSpeechSeq2Seq.from_pretrained(
             model_id,
             export=True,
