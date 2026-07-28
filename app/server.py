@@ -291,7 +291,88 @@ def generate_cloned_tts(text: str) -> str:
         logger.error(f"MiniMax T2A Exception: {e}")
     return ""
 
+def get_system_metrics() -> dict:
+    metrics = {
+        "cpu_temp": "N/A",
+        "cpu_usage": "N/A",
+        "gpu_render": "N/A",
+        "gpu_freq": "N/A"
+    }
+    # 1. CPU / Package Temperature
+    try:
+        thermal_dir = "/sys/class/thermal"
+        if os.path.exists(thermal_dir):
+            for zone in os.listdir(thermal_dir):
+                if zone.startswith("thermal_zone"):
+                    type_file = os.path.join(thermal_dir, zone, "type")
+                    temp_file = os.path.join(thermal_dir, zone, "temp")
+                    if os.path.exists(type_file) and os.path.exists(temp_file):
+                        with open(type_file, "r") as f:
+                            z_type = f.read().strip().lower()
+                        if "x86_pkg_temp" in z_type or "cpu" in z_type or zone == "thermal_zone0":
+                            with open(temp_file, "r") as f:
+                                t_val = float(f.read().strip())
+                                if t_val > 1000:
+                                    t_val /= 1000.0
+                                metrics["cpu_temp"] = f"{t_val:.1f}°C"
+                                break
+    except Exception as e:
+        logger.debug(f"Read CPU temp error: {e}")
+
+    # 2. CPU Usage (from /proc/stat)
+    try:
+        with open("/proc/stat", "r") as f:
+            line = f.readline()
+        if line.startswith("cpu "):
+            parts = [float(x) for x in line.split()[1:]]
+            idle = parts[3] + parts[4]
+            total = sum(parts)
+            if hasattr(get_system_metrics, "_prev_total"):
+                diff_total = total - get_system_metrics._prev_total
+                diff_idle = idle - get_system_metrics._prev_idle
+                if diff_total > 0:
+                    usage = (1.0 - diff_idle / diff_total) * 100.0
+                    metrics["cpu_usage"] = f"{usage:.1f}%"
+            get_system_metrics._prev_total = total
+            get_system_metrics._prev_idle = idle
+    except Exception as e:
+        logger.debug(f"Read CPU usage error: {e}")
+
+    # 3. Intel GPU Metrics (from /sys/class/drm/card0 or /sys/class/drm/renderD128)
+    try:
+        gt_act_freq = "/sys/class/drm/card0/gt_act_freq_mhz"
+        if not os.path.exists(gt_act_freq):
+            gt_act_freq = "/sys/class/drm/card0/gt/gt0/rps_act_freq_mhz"
+        if os.path.exists(gt_act_freq):
+            with open(gt_act_freq, "r") as f:
+                metrics["gpu_freq"] = f"{f.read().strip()} MHz"
+
+        # Check GPU Render busy percentage if available in sysfs
+        busy_file = "/sys/class/drm/card0/gt/gt0/rc6_residency_ms"
+        if os.path.exists(busy_file):
+            with open(busy_file, "r") as f:
+                rc6 = float(f.read().strip())
+            now_ms = asyncio.get_event_loop().time() * 1000.0 if asyncio.get_event_loop().is_running() else 0
+            if hasattr(get_system_metrics, "_prev_rc6") and get_system_metrics._prev_time:
+                diff_time = now_ms - get_system_metrics._prev_time
+                diff_rc6 = rc6 - get_system_metrics._prev_rc6
+                if diff_time > 0:
+                    # rc6 is idle time percentage estimation
+                    idle_pct = min(100.0, max(0.0, (diff_rc6 / diff_time) * 100.0))
+                    active_pct = 100.0 - idle_pct
+                    metrics["gpu_render"] = f"{active_pct:.1f}%"
+            get_system_metrics._prev_rc6 = rc6
+            get_system_metrics._prev_time = now_ms
+    except Exception as e:
+        logger.debug(f"Read GPU metrics error: {e}")
+
+    return metrics
+
 app = FastAPI()
+
+@app.get("/api/system_status")
+async def system_status():
+    return get_system_metrics()
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -313,12 +394,14 @@ HTML_CONTENT = """<!DOCTYPE html>
         .face-container { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
         #realFace { height: 85vh; max-width: 95vw; object-fit: contain; border-radius: 20px; box-shadow: 0 0 50px rgba(255, 121, 198, 0.25); }
 
-        .top-bar { position: absolute; top: 20px; right: 20px; z-index: 10; display: flex; gap: 12px; align-items: center; }
+        .top-bar { position: absolute; top: 20px; right: 20px; z-index: 10; display: flex; gap: 10px; align-items: center; }
         .btn { background: rgba(255, 121, 198, 0.85); color: #000; border: none; padding: 10px 20px; font-size: 14px; font-weight: bold; border-radius: 20px; cursor: pointer; backdrop-filter: blur(10px); transition: 0.2s; }
         .btn-danger { background: rgba(255, 85, 85, 0.85); color: #fff; }
         .btn-send { background: #81c784; color: #000; }
         .btn:hover { transform: scale(1.05); }
         .status-badge { background: rgba(0,0,0,0.6); padding: 8px 16px; border-radius: 20px; font-size: 13px; color: #ff79c6; border: 1px solid rgba(255, 121, 198, 0.4); backdrop-filter: blur(10px); }
+        .metrics-badge { background: rgba(15, 23, 42, 0.75); padding: 8px 14px; border-radius: 20px; font-size: 12px; color: #8ea2ff; border: 1px solid rgba(142, 162, 255, 0.35); backdrop-filter: blur(10px); display: flex; gap: 10px; }
+        .metric-item { display: flex; align-items: center; gap: 4px; }
 
         .bottom-panel { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 85%; max-width: 800px; background: rgba(15, 15, 20, 0.85); backdrop-filter: blur(15px); padding: 15px 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 30px rgba(0,0,0,0.6); z-index: 10; display: flex; flex-direction: column; gap: 10px; }
         .sub-agent { color: #ff79c6; font-size: 17px; font-weight: 500; text-align: left; }
@@ -331,6 +414,11 @@ HTML_CONTENT = """<!DOCTYPE html>
 <body>
     <div class="main-stage">
         <div class="top-bar">
+            <div id="metricsBadge" class="metrics-badge">
+                <span class="metric-item" id="cpuTempItem">🌡️ CPU: --</span>
+                <span class="metric-item" id="cpuUsageItem">💻 Load: --</span>
+                <span class="metric-item" id="gpuRenderItem">🎮 GPU: --</span>
+            </div>
             <div id="status" class="status-badge">Status: Disconnected</div>
             <button id="connectBtn" class="btn">Connect (Hands-Free Voice)</button>
             <button id="stopBtn" class="btn btn-danger" style="display:none;">🛑 Stop / Release Mic</button>
@@ -534,6 +622,43 @@ HTML_CONTENT = """<!DOCTYPE html>
                 stopBtn.style.display = "none";
             };
         };
+
+        async function updateMetrics() {
+            try {
+                const res = await fetch('/api/system_status');
+                if (!res.ok) return;
+                const data = await res.json();
+                
+                const cpuTempEl = document.getElementById('cpuTempItem');
+                const cpuUsageEl = document.getElementById('cpuUsageItem');
+                const gpuRenderEl = document.getElementById('gpuRenderItem');
+                
+                if (data.cpu_temp && data.cpu_temp !== 'N/A') {
+                    cpuTempEl.innerText = `🌡️ CPU: ${data.cpu_temp}`;
+                } else {
+                    cpuTempEl.innerText = `🌡️ CPU: --`;
+                }
+                
+                if (data.cpu_usage && data.cpu_usage !== 'N/A') {
+                    cpuUsageEl.innerText = `💻 Load: ${data.cpu_usage}`;
+                } else {
+                    cpuUsageEl.innerText = `💻 Load: --`;
+                }
+
+                if (data.gpu_render && data.gpu_render !== 'N/A') {
+                    gpuRenderEl.innerText = `🎮 GPU: ${data.gpu_render}`;
+                } else if (data.gpu_freq && data.gpu_freq !== 'N/A') {
+                    gpuRenderEl.innerText = `🎮 GPU: ${data.gpu_freq}`;
+                } else {
+                    gpuRenderEl.innerText = `🎮 GPU: --`;
+                }
+            } catch (e) {
+                console.debug("Metrics fetch error:", e);
+            }
+        }
+
+        updateMetrics();
+        setInterval(updateMetrics, 2000);
     </script>
 </body>
 </html>

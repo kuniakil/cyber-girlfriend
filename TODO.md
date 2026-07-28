@@ -25,6 +25,9 @@
 - [x] **音訊播放互斥鎖與單一 Session 播放保護 (Audio Mutual Exclusion Lock)**
   - AI 播放 TTS 時自動切斷麥克風並暫停 VAD 靜音檢測，播放完畢延遲 600ms 恢復，徹底杜絕喇叭殘音被錄入導致自言自語的迴圈。
   - 前端播放新音訊前自動切斷舊 Audio 物件，確保同時間僅有單一聲音播放。
+- [x] **實時 CPU / GPU 溫度與硬體負載儀表板 (Hardware Metrics Dashboard)**
+  - 後端新增 `/api/system_status` API，讀取 Linux sysfs (`/sys/class/thermal` 及 `/proc/stat`、`gt_act_freq_mhz`) 獲取 CPU 溫度、CPU 負載率與 iGPU 頻率/渲染使用率。
+  - 前端頂部狀態列整合膠囊風指標 Badge (`🌡️ CPU: 53°C`, `💻 Load: 12%`, `🎮 GPU: 450 MHz`)，每 2 秒自動刷新。
 
 ---
 
