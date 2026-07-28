@@ -101,61 +101,49 @@
 
 ## 🛡️ CPU Spike 防護架構 (CPU Stability Hardening)
 
-**動機**：2026-07-28 嘗試 Intel iGPU 加速 Whisper STT 失敗（OpenVINO 在 N100 Gen12 Xe LP 上 kernel 編譯炸掉），決定回歸純 CPU faster-whisper。但純 CPU 路線下，長音訊 STT 推理時 CPU 會暴衝，可能影響同叢集其他 pod。需要在**架構層面**保護叢集穩定性。
+**動機**：2026-07-28 嘗試 Intel iGPU 加速 Whisper STT 失敗（OpenVINO 在 N100 Gen12 Xe LP 上 kernel 編譯炸掉），決定回歸純 CPU faster-whisper。
+
+**🟢 2026-07-28 實測結論：throttling 不需要做**
+
+切到 `cpu-clean` (commit `42d8ba6`) 後，實測 STT 推理期間的 CPU 行為：
+- CPU 使用率會**瞬間飆到 100%**
+- 但 spike **只持續 1-2 秒**就降回來
+- 叢集其他 pod 並沒有被連帶影響到
+
+**結論**：throttling 反而會拖慢 STT（增加推理時間 30-50%），但解決不了真正的問題（短暫 spike 本來就不會卡叢集）。**不做 throttling**。
 
 **參考 commit**：`42d8ba6` (cpu-clean HEAD), `e90ac8c` (放棄 GPU 前的最後狀態), 詳見 `INTEL_GPU_PLAN.md` 與 `~/.claude/projects/.../memory/intel-gpu-acceleration-plan.md`
 
-### ⏳ 待評估與實作項目 (TBD)
+### 📋 評估過但**不實作**的方案（記錄用，避免未來 AI 重複推薦）
 
-- [ ] **STT 任務佇列 (Task Queue with Concurrency Cap)**
-  - 限制同時進行的 STT 推理數量（例如 N=2）
-  - 用 `asyncio.Semaphore(2)` 包 `stt_model.transcribe()` 呼叫
-  - 預期效果：CPU 占用上限變可控，不會無限制堆疊
-  - 風險：客戶端排隊時間變長，但叢集不會被拖垮
-  - 參考實作位置：`app/server.py` 的 `websocket_endpoint()` STT 區段（行 745+）
+- ❌ **STT 任務佇列 (Task Queue with Concurrency Cap)**
+  - 用 `asyncio.Semaphore(2)` 限制同時 STT 數量
+  - **不做**：throttle 會拖慢 STT，但實際 spike 只有 1-2 秒，叢集沒被卡到
+  - 適用情境改變：若未來叢集擴大到 10+ pods 同時 STT 才考慮
 
-- [ ] **降低 `cpu_threads` 從 4 → 2**
-  - 單次 STT 推理的 CPU 占用降低約 50%
-  - 預期效果：CPU 暴衝幅度減半，叢集其他 pod 不受連帶影響
-  - 風險：單次 STT 推理時間變慢約 30-50%（但 N100 4 cores 跑 2 threads 仍可接受）
-  - 參考實作位置：`app/server.py:118` 的 `WhisperModel(..., cpu_threads=4)`
+- ❌ **降低 `cpu_threads` 從 4 → 2**
+  - 簡單改一行，CPU 占用減半
+  - **不做**：會讓 STT 推理時間從 ~1.5s 增到 ~2.5s，但 spike 本來就短，效益不大
 
-- [ ] **Whisper Model 預載入 + 快取 (Eager Load + LRU Cache)**
-  - 確保 `stt_model` 在 server 啟動時就載入完成（現在已經做了）
-  - 可考慮加 LRU cache for audio features 來避免重複處理相似輸入
-  - 預期效果：減少 cold start latency，STT pipeline 整體 latency 更穩定
-  - 風險：低，純粹是啟動優化
+- ❌ **CPU Watchdog（>80% 持續 10s 自動暫停）**
+  - 主動防禦 + alert
+  - **不做**：目前 spike 短到 watchdog 根本不會觸發，等真的需要時再加
 
-- [ ] **Per-Client Rate Limiting (WebSocket 層)**
-  - 每個 WebSocket client 每秒最多 N 個 STT 請求
-  - 用 Redis 或 in-memory dict 實作 sliding window counter
-  - 預期效果：避免單一 client 惡意或 bug 導致無限 STT 呼叫
-  - 風險：中，需要 trade-off 公平性 vs 複雜度
-  - 參考實作位置：`app/server.py` 的 WebSocket handler 入口
+- ❌ **Per-Client Rate Limiting**
+  - 防單一 client 惡意/bug 呼叫
+  - **不做**：目前沒有觀察到這個情境，先 YAGNI
 
-- [ ] **CPU 監控告警 (CPU Watchdog)**
-  - 當 `/api/system_status` 的 `cpu_usage` 超過閾值（例如 80%）持續 10 秒，自動：
-    - 暫停接受新 STT 請求
-    - 發 alert 到 Slack/PagerDuty
-  - 預期效果：主動防禦，避免 CPU 100% 卡死整個 node
-  - 風險：低，純粹是 observability + safety net
+### 🔍 觀察指標（被動監控，不主動干預）
 
-### 📊 評估優先順序
+`/api/system_status` 已經有 CPU/GPU 儀表板（每 2 秒刷新），如果真的發現：
+- CPU 持續 >80% **超過 10 秒**（不是短暫 spike）
+- 叢集其他 pod 開始被影響（k8s event 或 pod restart）
 
-| 優先 | 項目 | 理由 |
-|---|---|---|
-| 🥇 P1 | STT 任務佇列 | 直接解決 CPU 暴衝根本問題 |
-| 🥈 P2 | 降低 cpu_threads | 簡單改一行，效果顯著 |
-| 🥉 P3 | CPU Watchdog | 加 safety net |
-| P4 | Per-Client Rate Limiting | 防惡意/防 bug，情境較少發生 |
-| P5 | Model LRU Cache | 純優化，非必要 |
+**那時候再重新評估**這幾個方案。
 
-### 🎯 預期效益
+### 💡 結論
 
-實作 P1 + P2 後：
-- N100 4 cores 在滿載情況下 STT 推理占用從 ~350% CPU（4 threads）降到 ~150% CPU（2 threads + queue cap）
-- 叢集其他 pod 仍能正常運作，不會被連帶卡死
-- 用戶體驗：STT 推理時間從 ~1.5s 略增到 ~2.5s，但叢集穩定性大幅提升
+CPU spike 在 N100 4 cores 跑 faster-whisper small int8 是**可控的**。throttling 的成本（STT 變慢）大於效益（解決一個不存在的問題）。保持現狀即可，把精力放在其他改進上。
 
 ---
 
