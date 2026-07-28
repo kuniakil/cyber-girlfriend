@@ -2,6 +2,7 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install base system packages (python3, ffmpeg, OpenCL loader)
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
@@ -9,13 +10,20 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     ffmpeg \
     curl \
-    intel-opencl-icd \
-    intel-igc-core \
-    intel-igc-opencl \
+    wget \
     ocl-icd-libopencl1 \
-    && groupadd -g 990 render || true \
-    && usermod -aG video root || true \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Intel GPU drivers from GitHub releases (same approach as Immich ML)
+RUN mkdir -p /tmp/intel-gpu && cd /tmp/intel-gpu \
+    && wget -q https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.17537.24/intel-igc-core_1.0.17537.24_amd64.deb \
+    && wget -q https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.17537.24/intel-igc-opencl_1.0.17537.24_amd64.deb \
+    && wget -q https://github.com/intel/compute-runtime/releases/download/26.22.38646.4/intel-opencl-icd_26.22.38646.4-0_amd64.deb \
+    && wget -q https://github.com/intel/compute-runtime/releases/download/26.22.38646.4/libigdgmm12_22.10.0_amd64.deb \
+    && dpkg -i ./*.deb || apt-get install -f -y \
+    && rm -rf /tmp/intel-gpu \
+    && groupadd -g 990 render || true \
+    && usermod -aG video root || true
 
 WORKDIR /app
 
