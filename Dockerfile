@@ -30,7 +30,7 @@ RUN python3 -m pip install --no-cache-dir \
     duckduckgo_search \
     optimum[onnxruntime] \
     && python3 -m pip uninstall -y onnxruntime \
-    && python3 -m pip install --no-cache-dir onnxruntime-openvino==1.24.1
+    && python3 -m pip install --no-cache-dir onnxruntime-openvino==1.23.0
 
 COPY app/ /app/
 
