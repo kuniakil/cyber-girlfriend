@@ -116,39 +116,8 @@ def search_memory(query: str) -> str:
 
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 
-ort_stt_pipeline = None
-stt_model = None
-
-try:
-    import onnxruntime as ort
-    providers = ort.get_available_providers()
-    logger.info(f"ONNXRuntime Available Providers: {providers}")
-    if "OpenVINOExecutionProvider" in providers and WHISPER_DEVICE in ["auto", "gpu", "openvino"]:
-        from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
-        from transformers import AutoProcessor, pipeline
-        model_id = f"openai/whisper-{WHISPER_MODEL_SIZE}"
-        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU...")
-        provider_options = {"device_type": "GPU_FP16"}
-        ort_model = ORTModelForSpeechSeq2Seq.from_pretrained(
-            model_id, 
-            export=True, 
-            provider="OpenVINOExecutionProvider",
-            provider_options=provider_options
-        )
-        processor = AutoProcessor.from_pretrained(model_id)
-        ort_stt_pipeline = pipeline(
-            "automatic-speech-recognition", 
-            model=ort_model, 
-            tokenizer=processor.tokenizer, 
-            feature_extractor=processor.feature_extractor
-        )
-        logger.info("ONNXRuntime Intel GPU (OpenVINOExecutionProvider) Whisper pipeline successfully loaded!")
-except Exception as ort_err:
-    logger.warning(f"ONNXRuntime GPU initialization failed or skipped ({ort_err}), falling back to faster-whisper CPU.")
-
-if not stt_model:
-    logger.info(f"Loading faster-whisper ({WHISPER_MODEL_SIZE}, int8, cpu_threads=4)...")
-    stt_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4, download_root=WHISPER_DIR)
+logger.info(f"Loading faster-whisper ({WHISPER_MODEL_SIZE}, int8, cpu_threads=4)...")
+stt_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4, download_root=WHISPER_DIR)
 
 llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL) if LLM_API_KEY else None
 
@@ -748,20 +717,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     f.write(raw_bytes)
 
                 try:
-                    if ort_stt_pipeline:
-                        try:
-                            ort_res = ort_stt_pipeline(tmp_audio, generate_kwargs={"language": "chinese", "task": "transcribe"})
-                            raw_user_text = ort_res.get("text", "").strip() if isinstance(ort_res, dict) else str(ort_res).strip()
-                        except Exception as e:
-                            logger.error(f"ORT STT error ({e}), falling back to faster-whisper CPU")
-                            segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
-                            raw_user_text = "".join(seg.text for seg in segments).strip()
-                    else:
-                        segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
-                        raw_user_text = "".join(seg.text for seg in segments).strip()
-                except Exception as stt_err:
-                    logger.error(f"STT process error: {stt_err}")
-                    raw_user_text = ""
+                    segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
+                    raw_user_text = "".join(seg.text for seg in segments).strip()
                 finally:
                     if os.path.exists(tmp_audio):
                         os.unlink(tmp_audio)
