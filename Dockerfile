@@ -5,6 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     clinfo \
     ocl-icd-libopencl1 \
+    mesa-opencl-icd \
+    intel-media-va-driver \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
