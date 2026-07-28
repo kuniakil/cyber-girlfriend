@@ -2,7 +2,7 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-dev \
@@ -19,10 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN python3 -m pip install --no-cache-dir --break-system-packages \
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu
 
-RUN python3 -m pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
     websockets \
@@ -30,8 +33,8 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages \
     openai \
     duckduckgo_search \
     optimum[onnxruntime] \
-    && python3 -m pip uninstall -y onnxruntime \
-    && python3 -m pip install --no-cache-dir --break-system-packages onnxruntime-openvino
+    && pip uninstall -y onnxruntime \
+    && pip install --no-cache-dir onnxruntime-openvino
 
 COPY app/ /app/
 
