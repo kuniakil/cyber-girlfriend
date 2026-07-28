@@ -457,7 +457,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         const statusDiv = document.getElementById('status'), connectBtn = document.getElementById('connectBtn'), stopBtn = document.getElementById('stopBtn');
         const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
-        const SILENCE_THRESHOLD = 15;
+        const SILENCE_THRESHOLD = 25;
         const SILENCE_DURATION = 1500;
         const MAX_RECORD_TIME = 30000;
 
