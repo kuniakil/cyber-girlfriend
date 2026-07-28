@@ -1,16 +1,14 @@
-FROM ubuntu:22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
+FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    python3-dev \
     ffmpeg \
     curl \
     clinfo \
     intel-opencl-icd \
-    intel-media-va-driver-non-free \
+    intel-igc-core \
+    intel-igc-opencl \
+    && groupadd -g 990 render || true \
+    && usermod -aG video root || true \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,8 +22,8 @@ RUN pip install --no-cache-dir \
     faster-whisper \
     openai \
     duckduckgo_search \
-    openvino \
-    optimum[intel]
+    onnxruntime-openvino \
+    optimum[onnxruntime]
 
 COPY app/ /app/
 
