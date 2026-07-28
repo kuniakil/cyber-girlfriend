@@ -714,6 +714,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
                     raw_user_text = "".join(seg.text for seg in segments).strip()
+                except Exception as stt_err:
+                    logger.error(f"STT process error: {stt_err}")
+                    raw_user_text = ""
                 finally:
                     if os.path.exists(tmp_audio):
                         os.unlink(tmp_audio)
