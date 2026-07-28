@@ -99,6 +99,59 @@
 
 ---
 
+## 🎙️ STT 錄音模式演進 (Recording Mode Evolution)
+
+**🟢 2026-07-28 最終決定：Typeless-style 手動 push-to-talk**
+
+| Commit | 時間 | 模式 | 備註 |
+|---|---|---|---|
+| `0ca9f97` | 2026-07-27 23:36 | Hands-free VAD auto-stop | 引入預覽模式（不自動發送），SILENCE_DURATION=1200ms |
+| `6019fbd` | 2026-07-28 15:34 | Hands-free VAD auto-stop | SILENCE_DURATION=2200ms，加回 JS auto-send（已被 `833fadc` revert） |
+| `d9c8028` | 2026-07-28 16:08 | Hands-free VAD auto-stop | SILENCE_DURATION=1500ms（被 cherry-pick 漏掉） |
+| `833fadc` | 2026-07-28 (cpu-clean) | Hands-free VAD auto-stop | SILENCE_DURATION=1500ms，移除 JS auto-send（純預覽） |
+| `333ef72` | 2026-07-28 (cpu-clean) | Hands-free VAD auto-stop | SILENCE_THRESHOLD=15→25，過濾背景噪音 |
+| **`f077423`** | **2026-07-28 (cpu-clean)** | **Typeless-style manual push-to-talk** | **新加 🎤 Record 按鈕，移除 VAD silence auto-stop** |
+
+### 為什麼從 hands-free 換成 push-to-talk
+
+1. **背景噪音問題**：風扇/冷氣讓 VAD 誤判為持續說話，每次都要等 MAX_RECORD_TIME (30s) timeout 才結束
+2. **使用者偏好 Typeless 風格**：明確 push-to-start / push-to-stop，UI 行為更可預測
+3. **VAD threshold 調校是治標**：噪音環境千變萬化，silence threshold 永遠調不到完美
+
+### 目前 UX 流程（commit `f077423`）
+
+1. 點 `Connect` → WebSocket 連線 + 顯示 `🎤 開始錄音` 按鈕
+2. 點 `🎤 開始錄音` → 按鈕變 `⏹️ 停止錄音`，狀態 `🔴 錄音中...`
+3. 點 `⏹️ 停止錄音` → 停止錄音、開始 STT 處理、狀態 `Transcribing Audio...`
+4. STT 完成 → 文字填入預覽框，狀態 `Audio STT Ready (review & send)`
+5. 使用者修改文字後按 `發送` 或 `Enter` → LLM 處理、狀態 `Girlfriend Thinking...`
+6. AI 回覆（含 TTS 音訊）→ 播放完後狀態 `Ready (click 🎤 to record)`
+7. **不會** auto-restart 錄音，要使用者再按一次 `🎤 開始錄音`
+8. **安全網**：若使用者按了忘記停，30s 後自動 timeout 停止（避免無限錄音）
+
+### 移除的程式碼
+- ❌ `SILENCE_THRESHOLD` / `SILENCE_DURATION` 常數
+- ❌ `checkVAD()` 函式（音頻頻率分析）
+- ❌ `silenceStart` / `micAnalyser` / `audioCtx` 變數
+- ❌ WebSocket connect 後 auto-start 錄音
+- ❌ AI TTS 結束後 `setTimeout(startAutoListening, 600)` auto-restart
+
+### 保留的安全網
+- ✅ `MAX_RECORD_TIME = 30000`（30s timeout via `setTimeout`）
+
+### 如果未來有人想改回 hands-free 模式
+
+需要：
+1. 加回 `startAutoListening()` + VAD silence detection
+2. WebSocket connect 後加 `startAutoListening()` 呼叫
+3. AI TTS 結束後加 `setTimeout(startAutoListening, 600)` 呼叫
+4. 加回 `micAnalyser` 設定
+5. 加回 `SILENCE_THRESHOLD` / `SILENCE_DURATION` 常數
+
+**但使用者已明確表示偏好 Typeless-style，**未來除非有強烈需求才考慮改回。
+
+---
+
 ## 🛡️ CPU Spike 防護架構 (CPU Stability Hardening)
 
 **動機**：2026-07-28 嘗試 Intel iGPU 加速 Whisper STT 失敗（OpenVINO 在 N100 Gen12 Xe LP 上 kernel 編譯炸掉），決定回歸純 CPU faster-whisper。
