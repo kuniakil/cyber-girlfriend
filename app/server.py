@@ -458,7 +458,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
         const SILENCE_THRESHOLD = 15;
-        const SILENCE_DURATION = 1200;
+        const SILENCE_DURATION = 2200;
         const MAX_RECORD_TIME = 10000;
 
         function releaseMicrophone() {
@@ -604,7 +604,10 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const data = JSON.parse(e.data);
                 if (data.type === 'transcript') {
                     userInput.value = data.text;
-                    statusDiv.innerText = "Status: Audio STT Ready";
+                    statusDiv.innerText = "Status: Transcribed. Sending...";
+                    if (data.text.trim()) {
+                        sendTextMessage();
+                    }
                 } else if (data.type === 'llm_reply') {
                     agentTextDiv.innerText = "💕 GF: " + data.text;
                 } else if (data.type === 'audio') {
