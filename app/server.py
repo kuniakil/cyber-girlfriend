@@ -146,7 +146,7 @@ try:
 except Exception as ort_err:
     logger.warning(f"ONNXRuntime GPU initialization failed or skipped ({ort_err}), falling back to faster-whisper CPU.")
 
-if not ort_stt_pipeline:
+if not stt_model:
     logger.info(f"Loading faster-whisper ({WHISPER_MODEL_SIZE}, int8, cpu_threads=4)...")
     stt_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4, download_root=WHISPER_DIR)
 
@@ -491,7 +491,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
         const SILENCE_THRESHOLD = 15;
-        const SILENCE_DURATION = 1200;
+        const SILENCE_DURATION = 2200;
         const MAX_RECORD_TIME = 10000;
 
         function releaseMicrophone() {
@@ -637,7 +637,10 @@ HTML_CONTENT = """<!DOCTYPE html>
                 const data = JSON.parse(e.data);
                 if (data.type === 'transcript') {
                     userInput.value = data.text;
-                    statusDiv.innerText = "Status: Audio STT Ready";
+                    statusDiv.innerText = "Status: Transcribed. Sending...";
+                    if (data.text.trim()) {
+                        sendTextMessage();
+                    }
                 } else if (data.type === 'llm_reply') {
                     agentTextDiv.innerText = "💕 GF: " + data.text;
                 } else if (data.type === 'audio') {
