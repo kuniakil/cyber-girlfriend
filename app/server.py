@@ -144,8 +144,8 @@ try:
         from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
         from transformers import AutoProcessor, pipeline
         model_id = f"openai/whisper-{WHISPER_MODEL_SIZE}"
-        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU (device_type=GPU_FP16)...")
-        provider_options = {"device_type": "GPU_FP16"}
+        logger.info(f"Loading ONNXRuntime OpenVINO Whisper ({model_id}) on Intel GPU (device_type=GPU, precision=FP16)...")
+        provider_options = {"device_type": "GPU", "precision": "FP16"}
         ort_model = ORTModelForSpeechSeq2Seq.from_pretrained(
             model_id,
             export=True,
