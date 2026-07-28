@@ -302,20 +302,32 @@ def get_system_metrics() -> dict:
     try:
         thermal_dir = "/sys/class/thermal"
         if os.path.exists(thermal_dir):
-            for zone in os.listdir(thermal_dir):
+            pkg_temp = None
+            fallback_temp = None
+            for zone in sorted(os.listdir(thermal_dir)):
                 if zone.startswith("thermal_zone"):
                     type_file = os.path.join(thermal_dir, zone, "type")
                     temp_file = os.path.join(thermal_dir, zone, "temp")
                     if os.path.exists(type_file) and os.path.exists(temp_file):
                         with open(type_file, "r") as f:
                             z_type = f.read().strip().lower()
-                        if "x86_pkg_temp" in z_type or "cpu" in z_type or zone == "thermal_zone0":
-                            with open(temp_file, "r") as f:
-                                t_val = float(f.read().strip())
-                                if t_val > 1000:
-                                    t_val /= 1000.0
-                                metrics["cpu_temp"] = f"{t_val:.1f}°C"
-                                break
+                        with open(temp_file, "r") as f:
+                            raw_val = f.read().strip()
+                            if not raw_val or not raw_val.isdigit():
+                                continue
+                            t_val = float(raw_val)
+                            if t_val > 1000:
+                                t_val /= 1000.0
+                        if "x86_pkg_temp" in z_type or "pkg" in z_type or "coretemp" in z_type:
+                            pkg_temp = f"{t_val:.1f}°C"
+                            break
+                        elif not fallback_temp and "acpitz" not in z_type:
+                            fallback_temp = f"{t_val:.1f}°C"
+                        elif not fallback_temp:
+                            fallback_temp = f"{t_val:.1f}°C"
+            final_temp = pkg_temp or fallback_temp
+            if final_temp:
+                metrics["cpu_temp"] = final_temp
     except Exception as e:
         logger.debug(f"Read CPU temp error: {e}")
 
