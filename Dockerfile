@@ -1,12 +1,17 @@
-FROM python:3.11-slim
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
     ffmpeg \
     curl \
     clinfo \
-    ocl-icd-libopencl1 \
-    mesa-opencl-icd \
-    intel-media-va-driver \
+    intel-opencl-icd \
+    intel-media-va-driver-non-free \
+    libze1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
