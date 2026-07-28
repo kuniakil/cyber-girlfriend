@@ -490,8 +490,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
         const SILENCE_THRESHOLD = 15;
-        const SILENCE_DURATION = 2200;
-        const MAX_RECORD_TIME = 30000;
+        const SILENCE_DURATION = 1500;
+        const MAX_RECORD_TIME = 15000;
 
         function releaseMicrophone() {
             if (audioStream) {

@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -6,22 +6,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-dev \
+    python3-venv \
     ffmpeg \
     curl \
-    clinfo \
     intel-opencl-icd \
-    intel-media-va-driver-non-free \
+    intel-igc-core \
+    intel-igc-opencl \
+    ocl-icd-libopencl1 \
     && groupadd -g 990 render || true \
     && usermod -aG video root || true \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN python3 -m pip install --no-cache-dir --upgrade pip
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+    torch --index-url https://download.pytorch.org/whl/cpu
 
-RUN python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-
-RUN python3 -m pip install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
     fastapi \
     uvicorn \
     websockets \
@@ -30,7 +31,7 @@ RUN python3 -m pip install --no-cache-dir \
     duckduckgo_search \
     optimum[onnxruntime] \
     && python3 -m pip uninstall -y onnxruntime \
-    && python3 -m pip install --no-cache-dir onnxruntime-openvino==1.23.0
+    && python3 -m pip install --no-cache-dir --break-system-packages onnxruntime-openvino
 
 COPY app/ /app/
 
