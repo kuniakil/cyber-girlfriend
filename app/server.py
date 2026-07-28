@@ -159,7 +159,30 @@ try:
             tokenizer=processor.tokenizer,
             feature_extractor=processor.feature_extractor
         )
-        logger.info("ONNXRuntime Intel GPU (OpenVINOExecutionProvider) Whisper pipeline successfully loaded!")
+
+        # CRITICAL: Verify the OpenVINOExecutionProvider actually got bound to the session.
+        # Without this check, optimum silently falls back to CPUExecutionProvider when GPU
+        # init fails (e.g. missing libigdrcl.so), and we'd print a misleading "GPU loaded"
+        # message while actually running STT on CPU.
+        try:
+            active_providers = ort_model.model.session.get_providers()
+        except AttributeError:
+            try:
+                active_providers = ort_model.model.get_ort_session().get_providers()
+            except AttributeError:
+                active_providers = []
+        logger.info(f"ONNXRuntime session active providers: {active_providers}")
+        if "OpenVINOExecutionProvider" not in active_providers:
+            raise RuntimeError(
+                f"OpenVINOExecutionProvider NOT in active session providers (got: {active_providers}). "
+                "The model loaded but is NOT running on Intel GPU. "
+                "Common causes: (1) libigdrcl.so missing inside container, "
+                "(2) /dev/dri/renderD128 not accessible, "
+                "(3) OpenVINO driver version incompatible with iGPU. "
+                "Falling back to faster-whisper CPU."
+            )
+
+        logger.info(f"ONNXRuntime Intel GPU (OpenVINOExecutionProvider) Whisper pipeline successfully loaded!")
 except ImportError as ie:
     logger.warning(f"GPU path ImportError ({ie}) — likely missing `transformers` or `optimum[onnxruntime]`. Falling back to faster-whisper CPU.")
 except Exception as ort_err:
