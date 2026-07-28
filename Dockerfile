@@ -10,8 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     clinfo \
     intel-opencl-icd \
-    intel-igc-core \
-    intel-igc-opencl \
     intel-media-va-driver-non-free \
     && groupadd -g 990 render || true \
     && usermod -aG video root || true \
