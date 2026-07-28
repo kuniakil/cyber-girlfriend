@@ -99,6 +99,66 @@
 
 ---
 
+## 🛡️ CPU Spike 防護架構 (CPU Stability Hardening)
+
+**動機**：2026-07-28 嘗試 Intel iGPU 加速 Whisper STT 失敗（OpenVINO 在 N100 Gen12 Xe LP 上 kernel 編譯炸掉），決定回歸純 CPU faster-whisper。但純 CPU 路線下，長音訊 STT 推理時 CPU 會暴衝，可能影響同叢集其他 pod。需要在**架構層面**保護叢集穩定性。
+
+**參考 commit**：`42d8ba6` (cpu-clean HEAD), `e90ac8c` (放棄 GPU 前的最後狀態), 詳見 `INTEL_GPU_PLAN.md` 與 `~/.claude/projects/.../memory/intel-gpu-acceleration-plan.md`
+
+### ⏳ 待評估與實作項目 (TBD)
+
+- [ ] **STT 任務佇列 (Task Queue with Concurrency Cap)**
+  - 限制同時進行的 STT 推理數量（例如 N=2）
+  - 用 `asyncio.Semaphore(2)` 包 `stt_model.transcribe()` 呼叫
+  - 預期效果：CPU 占用上限變可控，不會無限制堆疊
+  - 風險：客戶端排隊時間變長，但叢集不會被拖垮
+  - 參考實作位置：`app/server.py` 的 `websocket_endpoint()` STT 區段（行 745+）
+
+- [ ] **降低 `cpu_threads` 從 4 → 2**
+  - 單次 STT 推理的 CPU 占用降低約 50%
+  - 預期效果：CPU 暴衝幅度減半，叢集其他 pod 不受連帶影響
+  - 風險：單次 STT 推理時間變慢約 30-50%（但 N100 4 cores 跑 2 threads 仍可接受）
+  - 參考實作位置：`app/server.py:118` 的 `WhisperModel(..., cpu_threads=4)`
+
+- [ ] **Whisper Model 預載入 + 快取 (Eager Load + LRU Cache)**
+  - 確保 `stt_model` 在 server 啟動時就載入完成（現在已經做了）
+  - 可考慮加 LRU cache for audio features 來避免重複處理相似輸入
+  - 預期效果：減少 cold start latency，STT pipeline 整體 latency 更穩定
+  - 風險：低，純粹是啟動優化
+
+- [ ] **Per-Client Rate Limiting (WebSocket 層)**
+  - 每個 WebSocket client 每秒最多 N 個 STT 請求
+  - 用 Redis 或 in-memory dict 實作 sliding window counter
+  - 預期效果：避免單一 client 惡意或 bug 導致無限 STT 呼叫
+  - 風險：中，需要 trade-off 公平性 vs 複雜度
+  - 參考實作位置：`app/server.py` 的 WebSocket handler 入口
+
+- [ ] **CPU 監控告警 (CPU Watchdog)**
+  - 當 `/api/system_status` 的 `cpu_usage` 超過閾值（例如 80%）持續 10 秒，自動：
+    - 暫停接受新 STT 請求
+    - 發 alert 到 Slack/PagerDuty
+  - 預期效果：主動防禦，避免 CPU 100% 卡死整個 node
+  - 風險：低，純粹是 observability + safety net
+
+### 📊 評估優先順序
+
+| 優先 | 項目 | 理由 |
+|---|---|---|
+| 🥇 P1 | STT 任務佇列 | 直接解決 CPU 暴衝根本問題 |
+| 🥈 P2 | 降低 cpu_threads | 簡單改一行，效果顯著 |
+| 🥉 P3 | CPU Watchdog | 加 safety net |
+| P4 | Per-Client Rate Limiting | 防惡意/防 bug，情境較少發生 |
+| P5 | Model LRU Cache | 純優化，非必要 |
+
+### 🎯 預期效益
+
+實作 P1 + P2 後：
+- N100 4 cores 在滿載情況下 STT 推理占用從 ~350% CPU（4 threads）降到 ~150% CPU（2 threads + queue cap）
+- 叢集其他 pod 仍能正常運作，不會被連帶卡死
+- 用戶體驗：STT 推理時間從 ~1.5s 略增到 ~2.5s，但叢集穩定性大幅提升
+
+---
+
 ## 🔮 v2.0 待辦與升級規劃 (TODO for v2.0)
 
 - [ ] **Wav2Lip / LivePortrait 3D 動態驅動**
