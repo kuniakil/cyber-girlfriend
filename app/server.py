@@ -746,11 +746,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 try:
                     if ort_stt_pipeline:
-                        ort_res = ort_stt_pipeline(tmp_audio, generate_kwargs={"language": "chinese", "task": "transcribe"})
-                        raw_user_text = ort_res.get("text", "").strip() if isinstance(ort_res, dict) else str(ort_res).strip()
+                        try:
+                            ort_res = ort_stt_pipeline(tmp_audio, generate_kwargs={"language": "chinese", "task": "transcribe"})
+                            raw_user_text = ort_res.get("text", "").strip() if isinstance(ort_res, dict) else str(ort_res).strip()
+                        except Exception as e:
+                            logger.error(f"ORT STT error ({e}), falling back to faster-whisper CPU")
+                            segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
+                            raw_user_text = "".join(seg.text for seg in segments).strip()
                     else:
                         segments, _ = stt_model.transcribe(tmp_audio, language="zh", initial_prompt="這是一段繁體中文對話。包含地名與常見用語。")
                         raw_user_text = "".join(seg.text for seg in segments).strip()
+                except Exception as stt_err:
+                    logger.error(f"STT process error: {stt_err}")
+                    raw_user_text = ""
                 finally:
                     if os.path.exists(tmp_audio):
                         os.unlink(tmp_audio)
