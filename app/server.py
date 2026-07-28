@@ -459,7 +459,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 
         const SILENCE_THRESHOLD = 15;
         const SILENCE_DURATION = 2200;
-        const MAX_RECORD_TIME = 10000;
+        const MAX_RECORD_TIME = 30000;
 
         function releaseMicrophone() {
             if (audioStream) {
