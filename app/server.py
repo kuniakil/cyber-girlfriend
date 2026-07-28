@@ -433,6 +433,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             </div>
             <div id="status" class="status-badge">Status: Disconnected</div>
             <button id="connectBtn" class="btn">Connect (Hands-Free Voice)</button>
+            <button id="recordBtn" class="btn" style="display:none;">🎤 開始錄音</button>
             <button id="stopBtn" class="btn btn-danger" style="display:none;">🛑 Stop / Release Mic</button>
         </div>
 
@@ -451,15 +452,13 @@ HTML_CONTENT = """<!DOCTYPE html>
 
     <script>
         let ws, mediaRecorder, audioChunks = [], isRecording = false, audioStream = null;
-        let audioCtx = null, analyser = null, gainNode = null, silenceStart = null;
+        let recordStartTime = null;
         let isSpeaking = false, isStopped = false, currentPlayingAudio = null;
 
-        const statusDiv = document.getElementById('status'), connectBtn = document.getElementById('connectBtn'), stopBtn = document.getElementById('stopBtn');
+        const statusDiv = document.getElementById('status'), connectBtn = document.getElementById('connectBtn'), stopBtn = document.getElementById('stopBtn'), recordBtn = document.getElementById('recordBtn');
         const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
-        const SILENCE_THRESHOLD = 25;
-        const SILENCE_DURATION = 1500;
-        const MAX_RECORD_TIME = 30000;
+        const MAX_RECORD_TIME = 30000;  // 30s safety net in case user forgets to stop
 
         function releaseMicrophone() {
             if (audioStream) {
@@ -507,23 +506,19 @@ HTML_CONTENT = """<!DOCTYPE html>
             if (e.key === 'Enter') sendTextMessage();
         };
 
-        async function startAutoListening() {
+        // Typeless-style manual push-to-talk: click Record to start, click again to stop.
+        // Removed VAD silence auto-detection. Kept MAX_RECORD_TIME (30s) safety net.
+        async function startRecording() {
             if (isRecording || isSpeaking || isStopped) return;
             try {
                 audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 mediaRecorder = new MediaRecorder(audioStream);
                 audioChunks = [];
 
-                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const micSource = audioCtx.createMediaStreamSource(audioStream);
-                const micAnalyser = audioCtx.createAnalyser();
-                micAnalyser.fftSize = 256;
-                micSource.connect(micAnalyser);
-                const dataArray = new Uint8Array(micAnalyser.frequencyBinCount);
-
                 mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
                 mediaRecorder.onstop = async () => {
                     isRecording = false;
+                    recordBtn.innerText = "🎤 開始錄音";
                     if (audioChunks.length > 0 && !isStopped && !isSpeaking) {
                         const blob = new Blob(audioChunks, { type: 'audio/webm' });
                         const reader = new FileReader();
@@ -539,44 +534,37 @@ HTML_CONTENT = """<!DOCTYPE html>
 
                 mediaRecorder.start();
                 isRecording = true;
-                statusDiv.innerText = "Status: 🎙️ Listening...";
-                silenceStart = null;
+                recordStartTime = Date.now();
+                recordBtn.innerText = "⏹️ 停止錄音";
+                statusDiv.innerText = "Status: 🔴 錄音中...";
 
-                const recordStartTime = Date.now();
-                function checkVAD() {
-                    if (!isRecording || isStopped || isSpeaking) return;
-                    
-                    micAnalyser.getByteFrequencyData(dataArray);
-                    let sum = 0;
-                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-                    let avg = sum / dataArray.length;
-
-                    const now = Date.now();
-                    if (now - recordStartTime > MAX_RECORD_TIME) {
-                        statusDiv.innerText = "Status: Auto Sending...";
+                // MAX_RECORD_TIME safety net: stop after 30s if user forgets
+                setTimeout(() => {
+                    if (isRecording && Date.now() - recordStartTime >= MAX_RECORD_TIME) {
+                        statusDiv.innerText = "Status: ⏰ Timeout (30s), stopping...";
                         mediaRecorder.stop();
-                        return;
                     }
-
-                    if (avg < SILENCE_THRESHOLD) {
-                        if (!silenceStart) silenceStart = now;
-                        else if (now - silenceStart > SILENCE_DURATION && audioChunks.length > 0) {
-                            statusDiv.innerText = "Status: Auto Sending...";
-                            mediaRecorder.stop();
-                            return;
-                        }
-                    } else {
-                        silenceStart = null;
-                    }
-
-                    requestAnimationFrame(checkVAD);
-                }
-                requestAnimationFrame(checkVAD);
+                }, MAX_RECORD_TIME + 100);
 
             } catch (e) {
                 console.error("Mic error:", e);
             }
         }
+
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                statusDiv.innerText = "Status: Transcribing Audio...";
+            }
+        }
+
+        recordBtn.onclick = () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        };
 
         stopBtn.onclick = () => {
             isStopped = true;
@@ -586,6 +574,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             if (ws) ws.close();
             statusDiv.innerText = "Status: Stopped / Mic Released";
             stopBtn.style.display = "none";
+            recordBtn.style.display = "none";
             connectBtn.style.display = "inline-block";
         };
 
@@ -594,10 +583,10 @@ HTML_CONTENT = """<!DOCTYPE html>
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
             ws.onopen = () => {
-                statusDiv.innerText = "Status: Voice & Text Active";
+                statusDiv.innerText = "Status: Voice & Text Active (click 🎤 to record)";
                 connectBtn.style.display = "none";
                 stopBtn.style.display = "inline-block";
-                startAutoListening();
+                recordBtn.style.display = "inline-block";
             };
             ws.onmessage = (e) => {
                 if (isStopped) return;
@@ -616,15 +605,16 @@ HTML_CONTENT = """<!DOCTYPE html>
 
                     const audio = new Audio("data:audio/mp3;base64," + data.audio);
                     currentPlayingAudio = audio;
-                    
+
                     audio.play().catch(err => console.error("Play error:", err));
                     setupAudioAmplifier(audio);
-                    
+
                     audio.onended = () => {
                         isSpeaking = false;
                         currentPlayingAudio = null;
-                        statusDiv.innerText = "Status: Ready";
-                        if (!isStopped) setTimeout(startAutoListening, 600);
+                        // Typeless-style: do NOT auto-restart recording.
+                        // User clicks 🎤 Record button again to record next message.
+                        statusDiv.innerText = "Status: Ready (click 🎤 to record)";
                     };
                 }
             };
@@ -634,6 +624,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                 releaseMicrophone();
                 connectBtn.style.display = "inline-block";
                 stopBtn.style.display = "none";
+                recordBtn.style.display = "none";
             };
         };
 
