@@ -458,7 +458,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         const userInput = document.getElementById('userInput'), agentTextDiv = document.getElementById('agentText'), sendBtn = document.getElementById('sendBtn');
 
         const SILENCE_THRESHOLD = 15;
-        const SILENCE_DURATION = 2200;
+        const SILENCE_DURATION = 1500;
         const MAX_RECORD_TIME = 30000;
 
         function releaseMicrophone() {
@@ -603,11 +603,10 @@ HTML_CONTENT = """<!DOCTYPE html>
                 if (isStopped) return;
                 const data = JSON.parse(e.data);
                 if (data.type === 'transcript') {
+                    // Dual-mode input preview (per commit 0ca9f97): 僅將辨識文字送回前端預覽，
+                    // 使用者可手動修正後再按發送按鈕或 Enter，避免自動送出造成重複或文不對題。
                     userInput.value = data.text;
-                    statusDiv.innerText = "Status: Transcribed. Sending...";
-                    if (data.text.trim()) {
-                        sendTextMessage();
-                    }
+                    statusDiv.innerText = "Status: Audio STT Ready (review & send)";
                 } else if (data.type === 'llm_reply') {
                     agentTextDiv.innerText = "💕 GF: " + data.text;
                 } else if (data.type === 'audio') {
