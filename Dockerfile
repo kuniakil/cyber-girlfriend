@@ -22,8 +22,9 @@ RUN pip install --no-cache-dir \
     faster-whisper \
     openai \
     duckduckgo_search \
-    onnxruntime-openvino \
-    optimum[onnxruntime]
+    optimum[onnxruntime] \
+    && pip uninstall -y onnxruntime \
+    && pip install --no-cache-dir onnxruntime-openvino==1.24.1
 
 COPY app/ /app/
 
