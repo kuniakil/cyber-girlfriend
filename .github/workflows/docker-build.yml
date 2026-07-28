@@ -1,9 +1,12 @@
 name: Build & Push Docker Image
 
 on:
-  push:
-    branches: [ "main" ]
-    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g., v1.7.1, 2026-07-28). Leave blank to use commit SHA.'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -23,16 +26,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cyber-girlfriend:${{ steps.tag.outputs.value }}
+            ghcr.io/${{ github.repository_owner }}/cyber-girlfriend:latest
+
+      - name: Show result
+        run: |
+          echo "✓ Pushed: ghcr.io/${{ github.repository_owner }}/cyber-girlfriend:${{ steps.tag.outputs.value }}"
+          echo "  + latest"
+          echo ""
+          echo "Trigger a N100 rollout with:"
+          echo "  kubectl set image deployment/voice-agent voice-agent=ghcr.io/${{ github.repository_owner }}/cyber-girlfriend:${{ steps.tag.outputs.value }} -n voice-agent"
