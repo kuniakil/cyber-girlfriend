@@ -19,9 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN python3 -m pip install --no-cache-dir --upgrade pip
 
-RUN pip install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+RUN python3 -m pip install --no-cache-dir \
     fastapi \
     uvicorn \
     websockets \
@@ -29,8 +31,8 @@ RUN pip install --no-cache-dir \
     openai \
     duckduckgo_search \
     optimum[onnxruntime] \
-    && pip uninstall -y onnxruntime \
-    && pip install --no-cache-dir onnxruntime-openvino==1.24.1
+    && python3 -m pip uninstall -y onnxruntime \
+    && python3 -m pip install --no-cache-dir onnxruntime-openvino==1.24.1
 
 COPY app/ /app/
 
